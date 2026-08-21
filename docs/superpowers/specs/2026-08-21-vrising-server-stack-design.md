@@ -255,11 +255,17 @@ Séparer configuration et données runtime est plus prévisible.
 
 Sur réception de SIGTERM ou SIGINT, l'entrypoint enchaîne : `announce` aux
 joueurs connectés, puis la commande RCON `shutdown`, puis attente de la sortie
-effective du processus serveur (90 s maximum), et `SIGKILL` en dernier recours.
+effective du processus serveur (**300 s** maximum), et `SIGKILL` en dernier
+recours. L'entrypoint journalise le déclenchement de ce `SIGKILL` de secours,
+afin qu'un dépassement soit visible plutôt que silencieux.
 
-`stop_grace_period` est fixé à `120s` dans `compose.yaml`, délibérément
-supérieur aux 90 s de l'entrypoint, pour que Docker ne tue jamais le conteneur
+`stop_grace_period` est fixé à **`330s`** dans `compose.yaml`, délibérément
+supérieur aux 300 s de l'entrypoint, pour que Docker ne tue jamais le conteneur
 avant la fin de l'arrêt ordonné.
+
+Ces deux valeurs sont **issues d'une mesure et non d'une estimation** : voir la
+section « Risque principal » ci-dessous, qui donne le chiffre mesuré et, ce qui
+importe autant, la limite de confiance de cette mesure.
 
 ### Risque principal
 
@@ -302,12 +308,12 @@ rapport de sonde.
   d'exécuter son propre `SIGKILL` de secours avant que Docker n'intervienne
   à sa place.
 
-Ces deux valeurs remplacent, pour la Tâche 7, les 90 s / 120 s déjà écrits
-plus haut dans la section « Arrêt propre » (non modifiée ici : elle décrit
-encore l'intention du design, pas les valeurs finales). Un arrêt réel se
-termine dès la sortie du processus — la boucle d'attente sort dès que le
-processus meurt, donc un arrêt normal prendra ~220 s, pas 300 s ; les 300 s /
-330 s ne sont atteintes que si le serveur dépasse la durée mesurée ici.
+Ces deux valeurs sont celles retenues par le projet ; la section « Arrêt
+propre » ci-dessus les reprend. Elles ont remplacé les 90 s / 120s que ce
+document supposait avant la mesure. Un arrêt réel se termine dès la sortie du
+processus — la boucle d'attente sort dès que le processus meurt, donc un arrêt
+normal prendra ~220 s, pas 300 s ; les 300 s / 330s ne sont atteintes que si le
+serveur dépasse la durée mesurée ici.
 
 **Recommandation à la Tâche 7 (non implémentée dans cette tâche) :**
 journaliser explicitement le déclenchement du `SIGKILL` de secours si le
@@ -328,7 +334,7 @@ ports doivent être ouverts et redirigés pour que le serveur apparaisse dans la
 liste ; le port de jeu seul suffit pour une connexion par IP directe.
 
 **Compose** : `restart: unless-stopped` — correctif direct du défaut n°3, dont
-la survenue a été constatée — et `stop_grace_period: 120s`.
+la survenue a été constatée — et `stop_grace_period: 330s`.
 
 **Procédure de déploiement** sur le serveur Debian cible :
 
