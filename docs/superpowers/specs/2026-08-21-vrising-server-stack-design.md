@@ -280,14 +280,39 @@ trap SIGTERM, reste à câbler par la Tâche 7).
 
 **Écart mesuré à signaler à la Tâche 7 :** le délai entre l'envoi de la
 commande `shutdown 1 Test` et la sortie effective du processus a été
-d'environ **3 min 40 s** (serveur sans joueur connecté), pas les ~120 s
-supposées par le script de sonde. C'est nettement supérieur aux 90 s
-d'attente prévues pour l'entrypoint et au `stop_grace_period` de 120 s déjà
-fixé dans `compose.yaml` (voir « Arrêt propre » ci-dessus) : tels quels, ces
-délais couperaient l'arrêt ordonné avant son terme. La Tâche 7 doit revoir
-ces deux valeurs à la hausse (une marge confortable au-delà de 3 min 40 s,
-par exemple 240 s pour l'attente et `stop_grace_period`) avant de s'appuyer
-sur ce mécanisme.
+d'environ **3 min 40 s (220 s)** — pas les ~120 s supposées par le script de
+sonde. **Cette mesure est un échantillon de taille 1** : un seul essai, sur
+un serveur sans joueur connecté, non répété. Elle n'a pas été confirmée sous
+charge (joueurs connectés, monde plus complexe, latence Steam/EOS variable —
+le palier de ~1 min 16 s observé entre `EOS.Session - Entering
+ModifySessionAsync!` et le `SERVER SHUTTING DOWN` effectif évoque un appel
+réseau externe dont la durée n'est pas garantie stable). Les valeurs
+ci-dessous sont donc un **plancher issu de cette mesure unique, pas une marge
+démontrée par répétition ou par test sous charge** : un dépassement en
+conditions réelles (davantage de joueurs, service Steam/EOS plus lent) reste
+possible, et un implémenteur de la Tâche 7 doit le savoir sans avoir accès au
+rapport de sonde.
+
+**Valeurs retenues (décision R6, remplacent la recommandation ouverte ci-dessus) :**
+- `SHUTDOWN_TIMEOUT` = **300 s** — attente de sortie du processus serveur
+  dans l'entrypoint avant `SIGKILL` de secours. Marge d'environ 36 % au-dessus
+  des 220 s mesurés.
+- `stop_grace_period` = **330s** (`5m30s`) dans `compose.yaml` — 30 s
+  au-dessus du `SHUTDOWN_TIMEOUT`, pour que l'entrypoint ait le temps
+  d'exécuter son propre `SIGKILL` de secours avant que Docker n'intervienne
+  à sa place.
+
+Ces deux valeurs remplacent, pour la Tâche 7, les 90 s / 120 s déjà écrits
+plus haut dans la section « Arrêt propre » (non modifiée ici : elle décrit
+encore l'intention du design, pas les valeurs finales). Un arrêt réel se
+termine dès la sortie du processus — la boucle d'attente sort dès que le
+processus meurt, donc un arrêt normal prendra ~220 s, pas 300 s ; les 300 s /
+330 s ne sont atteintes que si le serveur dépasse la durée mesurée ici.
+
+**Recommandation à la Tâche 7 (non implémentée dans cette tâche) :**
+journaliser explicitement le déclenchement du `SIGKILL` de secours si le
+`SHUTDOWN_TIMEOUT` est atteint, pour qu'un dépassement futur (par exemple
+sous charge) soit visible dans les logs plutôt que silencieux.
 
 *(Repli documenté mais non retenu, RCON s'étant avéré fiable : conserver un
 `stop_grace_period` long en s'appuyant sur les autosaves. Dégradé, mais sans
