@@ -25,7 +25,12 @@ Ces contraintes s'appliquent implicitement à **toutes** les tâches.
 - **Ports** : `27015/udp` pour le jeu, `27016/udp` pour les requêtes. Ils doivent être **distincts** (la collision est le défaut n°2 de la spec).
 - **RCON** : `VR_RCON_BIND_ADDRESS=127.0.0.1` toujours. Le port RCON ne doit **jamais** apparaître dans la section `ports:` de `compose.yaml` — sauf dans le fichier d'override jetable de la Tâche 1.
 - **Secrets dans le `.env`** : toujours entre **guillemets simples**. Mesuré : les guillemets doubles interpolent (`"Mot$X"` → `Mot`), et ` #` démarre un commentaire.
-- **`stop_grace_period`** : `120s`, strictement supérieur au délai d'arrêt de l'entrypoint (`90s`).
+- **`stop_grace_period`** : `330s`, strictement supérieur au délai d'arrêt de
+  l'entrypoint (`300s`). **Ces valeurs sont issues d'une mesure, pas d'une
+  estimation** : la Tâche 1 a chronométré ~220 s entre la commande RCON et la
+  sortie du processus serveur. Les valeurs initiales du plan (90 s / 120s)
+  auraient fait tuer le serveur avant la fin de sa sauvegarde. Voir la section
+  « Risque principal » de la spec pour la limite statistique de cette mesure.
 - **Pas de guillemets dans `compose.yaml`** autour des valeurs interpolées : uniquement `${VAR}`.
 - **Aucun fichier du volume `vrising-persistent-data/` ni le `.env` ne doit être versionné.**
 
@@ -79,7 +84,7 @@ On compile le binaire réel qui sera utilisé dans l'image finale, pour tester l
 docker run --rm -v "$PWD/.tmp:/out" debian:12-slim sh -c '
 set -e
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends ca-certificates gcc make git
+apt-get install -y -qq --no-install-recommends ca-certificates gcc make git libc6-dev
 git clone --depth 1 --branch v0.7.2 https://github.com/Tiiffi/mcrcon.git /src
 make -C /src
 cp /src/mcrcon /out/mcrcon
@@ -192,7 +197,7 @@ implémente le trap SIGTERM sur cette base.
 ```markdown
 **Invalidé le 2026-08-21 (Tâche 1 du plan).** <symptôme observé>. Le repli
 documenté s'applique : l'entrypoint envoie SIGTERM au processus serveur et
-attend jusqu'à 90 s, en s'appuyant sur les autosaves (toutes les 120 s) pour
+attend jusqu'à 300 s, en s'appuyant sur les autosaves (toutes les 120 s) pour
 borner la perte. La Tâche 7 est adaptée en conséquence et n'utilise pas RCON.
 ```
 
@@ -317,10 +322,14 @@ FROM debian:12-slim AS builder
 ARG STEAM_APP_ID=1829350
 ARG MCRCON_REF=v0.7.2
 
+# libc6-dev est explicite et NECESSAIRE : sous --no-install-recommends, gcc
+# seul ne l'entraine pas, et la compilation de mcrcon echoue sur
+# "stdio.h: No such file or directory" (constate en Tache 1). Ne pas retirer.
+
 RUN dpkg --add-architecture i386 \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl gcc make git lib32gcc-s1 \
+      ca-certificates curl gcc make git libc6-dev lib32gcc-s1 \
  && rm -rf /var/lib/apt/lists/*
 
 # steamcmd
@@ -546,7 +555,7 @@ check_out "config: port de requete 27016" "target: 27016" docker compose config
 check "config: ports jeu et requete distincts" \
   sh -c 'test "$(docker compose config | grep -c "target: 2701[56]")" -eq 2'
 check_out "config: politique de redemarrage" "restart: unless-stopped" docker compose config
-check_out "config: delai de grace 120s" "stop_grace_period: 2m0s" docker compose config
+check_out "config: delai de grace 330s" "stop_grace_period: 5m30s" docker compose config
 check "config: port RCON jamais publie" \
   sh -c '! docker compose config | grep -q "25575"'
 check "config: regles de jeu montees en lecture seule" \
@@ -628,8 +637,9 @@ VRISING_BANS=
 RCON_PASSWORD='ChangeMoiAussi'
 
 # Delai maximal accorde a l'arret ordonne, en secondes. Doit rester inferieur
-# au stop_grace_period de compose.yaml (120s).
-SHUTDOWN_TIMEOUT=90
+# au stop_grace_period de compose.yaml (330s). La Tache 1 a mesure ~220s pour
+# un arret ordonne complet : ne pas descendre sous 300 sans nouvelle mesure.
+SHUTDOWN_TIMEOUT=300
 
 TZ=Europe/Paris
 EOF
@@ -670,9 +680,10 @@ services:
       dockerfile: Dockerfile
     image: vrising-server:local
     restart: unless-stopped
-    # Strictement superieur au SHUTDOWN_TIMEOUT de l'entrypoint (90s), pour que
+    # Strictement superieur au SHUTDOWN_TIMEOUT de l'entrypoint (300s), pour que
     # Docker ne tue jamais le conteneur avant la fin de l'arret ordonne.
-    stop_grace_period: 120s
+    # ~220s mesures en Tache 1 ; la marge couvre un serveur peuple.
+    stop_grace_period: 330s
     ports:
       - "${VR_GAME_PORT}:${VR_GAME_PORT}/udp"
       - "${VR_QUERY_PORT}:${VR_QUERY_PORT}/udp"
@@ -726,7 +737,7 @@ git commit -m "feat: configuration externalisee en .env
 Reecriture du compose sans aucune valeur en dur ni guillemet autour des
 interpolations, ce qui elimine a la racine le bug de guillemets inclus dans
 les valeurs. Ports 27015/27016 desormais distincts, restart unless-stopped,
-stop_grace_period a 120s. Regles de jeu en override partiel versionne."
+stop_grace_period a 330s. Regles de jeu en override partiel versionne."
 ```
 
 ---
@@ -781,7 +792,7 @@ set -uo pipefail
 
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
-GRACE="${SHUTDOWN_TIMEOUT:-90}"
+GRACE="${SHUTDOWN_TIMEOUT:-300}"
 
 DATA=/opt/vrising/save-data
 GAME=/opt/vrising/game
@@ -1122,7 +1133,10 @@ done
 ./tests/verify.sh arret
 ```
 
-Expected: `PASS=1 FAIL=0`. Les logs doivent montrer `serveur arrete proprement en Ns` avec `N < 90`.
+Expected: `PASS=1 FAIL=0`. Les logs doivent montrer `serveur arrete proprement en Ns` avec `N < 300`.
+
+**Patience requise :** la Tâche 1 a mesuré ~220 s pour un arret ordonne complet.
+Ce check prend donc environ 4 minutes, ce n'est pas un blocage.
 
 - [ ] **Step 6: Vérifier qu'aucune sauvegarde n'est corrompue**
 
@@ -1148,7 +1162,7 @@ git commit -m "feat: arret propre du serveur sur SIGTERM
 
 Corrige le exit 137 mesure sur l'image communautaire. RCON est active en
 interne uniquement (127.0.0.1, jamais publie) et sert a declencher un arret
-ordonne, avec SIGKILL en dernier recours apres 90s."
+ordonne, avec SIGKILL en dernier recours apres 300s."
 ```
 
 ---
