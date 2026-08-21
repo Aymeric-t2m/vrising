@@ -1,0 +1,18 @@
+services:
+  vrising:
+    image: sknnr/vrising-dedicated-server:latest
+    ports:
+      - "27015:27015/udp"
+      - "27016:27016/udp"
+    environment:
+      - SERVER_NAME="VRising Containerized"
+      - SERVER_PASSWORD="PleaseChangeMe"
+      - GAME_PORT=27015
+      - QUERY_PORT=27015
+      - DESCRIPTION="A VRising Server"
+      - BIND_ADDRESS=0.0.0.0
+      - HIDE_IP=true
+      - LOWER_FPS_EMPTY=true
+      - SECURE=true
+    volumes:
+      - ./vrising-persistent-data:/opt/steam/vrising/save-data
