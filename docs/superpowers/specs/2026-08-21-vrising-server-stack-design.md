@@ -263,18 +263,35 @@ avant la fin de l'arrêt ordonné.
 
 ### Risque principal
 
-**L'arrêt propre par RCON est la seule pièce du design non prouvée par le
-spike.** La commande `shutdown` est documentée et RCON s'active bien par
-variable `VR_*`, mais la réponse effective du serveur sous Wine n'a pas été
-vérifiée.
+**Validé le 2026-08-21 (Tâche 1 du plan).** RCON s'active bien par variable
+`VR_*` et le serveur répond à la commande `shutdown`, qui déclenche un arrêt
+ordonné. Syntaxe retenue : `shutdown <message times> <message>` (relevée via
+`help shutdown` sur le serveur lui-même — la doc officielle est ambiguë sur ce
+point ; exemple testé et fonctionnel : `shutdown 1 Test`). La Tâche 7 du plan
+implémente le trap SIGTERM sur cette base.
 
-La première tâche d'implémentation doit donc valider ce point, avec un critère
-binaire : `docker compose stop` rend **exit 0**, et non le `exit 137` mesuré
-sur l'image communautaire.
+Preuve mesurée : le dump de configuration du serveur montre `"Rcon": {
+"Enabled": true, "BindAddress": "0.0.0.0", "Port": 25575, ... }` (les
+variables `VR_*` sont donc bien lues nativement), mcrcon s'authentifie et
+obtient une réponse à `version`, et la commande `shutdown` fait sortir le
+processus serveur de lui-même avec **exit 0** — mesuré directement sur le
+conteneur, sans passer par `docker compose stop` (ce chemin complet, avec
+trap SIGTERM, reste à câbler par la Tâche 7).
 
-**Repli si RCON s'avère non fiable** : conserver un `stop_grace_period` long en
-s'appuyant sur les autosaves. Dégradé, mais sans perte massive puisque le
-serveur sauvegarde toutes les 120 s.
+**Écart mesuré à signaler à la Tâche 7 :** le délai entre l'envoi de la
+commande `shutdown 1 Test` et la sortie effective du processus a été
+d'environ **3 min 40 s** (serveur sans joueur connecté), pas les ~120 s
+supposées par le script de sonde. C'est nettement supérieur aux 90 s
+d'attente prévues pour l'entrypoint et au `stop_grace_period` de 120 s déjà
+fixé dans `compose.yaml` (voir « Arrêt propre » ci-dessus) : tels quels, ces
+délais couperaient l'arrêt ordonné avant son terme. La Tâche 7 doit revoir
+ces deux valeurs à la hausse (une marge confortable au-delà de 3 min 40 s,
+par exemple 240 s pour l'attente et `stop_grace_period`) avant de s'appuyer
+sur ce mécanisme.
+
+*(Repli documenté mais non retenu, RCON s'étant avéré fiable : conserver un
+`stop_grace_period` long en s'appuyant sur les autosaves. Dégradé, mais sans
+perte massive puisque le serveur sauvegarde toutes les 120 s.)*
 
 ## Réseau et déploiement
 
