@@ -98,10 +98,26 @@ echo
 echo "== Configuration =="
 check_out "config: nom sans guillemets parasites" "VR_SERVER_NAME: Serveur de test" \
   docker compose config
-check_out "config: port de jeu 27015" "target: 27015" docker compose config
-check_out "config: port de requete 27016" "target: 27016" docker compose config
-check "config: ports jeu et requete distincts" \
+# ATTENTION sur le nommage : ces deux assertions testent les ports PUBLIES,
+# que l'ancien compose defectueux publiait deja correctement (27015 et 27016).
+# Elles ne couvrent donc PAS le defaut n2, qui vivait dans les variables d'env
+# (QUERY_PORT=27015, identique a GAME_PORT). Nommees en consequence.
+check_out "config: port de jeu publie 27015" "target: 27015" docker compose config
+check_out "config: port de requete publie 27016" "target: 27016" docker compose config
+check "config: deux ports UDP publies et pas plus" \
   sh -c 'test "$(docker compose config | grep -c "target: 2701[56]")" -eq 2'
+
+# C'EST CETTE ASSERTION qui couvre le defaut n2. Elle porte sur les variables
+# d'environnement resolues, la ou le defaut se trouvait reellement. Les gardes
+# `test -n` sont essentielles : sans elles, une extraction qui echoue rendrait
+# deux chaines vides, egales, et le test passerait pour la mauvaise raison.
+check "config: ports de jeu et de requete distincts EN ENV (defaut n2)" \
+  sh -c '
+    C=$(docker compose config)
+    G=$(printf "%s" "$C" | sed -n "s/^ *VR_GAME_PORT: *\"\?\([0-9]\+\)\"\?/\1/p")
+    Q=$(printf "%s" "$C" | sed -n "s/^ *VR_QUERY_PORT: *\"\?\([0-9]\+\)\"\?/\1/p")
+    test -n "$G" && test -n "$Q" && test "$G" != "$Q"
+  '
 check_out "config: politique de redemarrage" "restart: unless-stopped" docker compose config
 check_out "config: delai de grace 330s" "stop_grace_period: 5m30s" docker compose config
 # `grep -q` rend 1 quand rien n'est trouve : sonde deterministe, donc
