@@ -59,8 +59,15 @@ check_out "runtime: prefixe Wine initialise" "system.reg" \
   docker run --rm --entrypoint ls vrising-server:local /opt/vrising/.wine
 check_out "runtime: utilisateur vrising en uid 10000" "uid=10000" \
   docker run --rm --entrypoint id vrising-server:local vrising
+# `command -v steamcmd` est INTROUVABLE meme dans le builder, ou steamcmd
+# existe pourtant a /opt/steamcmd/steamcmd.sh : il n'est jamais sur le PATH.
+# L'assertion passait donc dans les DEUX images sans rien discriminer. On teste
+# le chemin d'installation reel, verifie present dans le builder et absent ici.
 check "runtime: steamcmd absent de l'image finale" \
-  sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "command -v steamcmd"'
+  sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "ls -d /opt/steamcmd"'
+# L'outillage de compilation ne doit pas non plus avoir survecu a COPY --from.
+check "runtime: outillage de build absent" \
+  sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "command -v gcc || command -v make || command -v git"'
 check_out "runtime: prefixe Wine possede par vrising" "10000" \
   docker run --rm --entrypoint stat vrising-server:local -c %u /opt/vrising/.wine
 
