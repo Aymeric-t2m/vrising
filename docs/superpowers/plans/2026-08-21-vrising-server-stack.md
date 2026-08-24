@@ -657,9 +657,12 @@ check "config: deux ports UDP publies et pas plus" \
   sh -c 'test "$(docker compose config | grep -c "target: 2701[56]")" -eq 2'
 
 # C'EST CETTE ASSERTION qui couvre le defaut n2. Elle porte sur les variables
-# d'environnement resolues, la ou le defaut se trouvait reellement. Les gardes
-# `test -n` sont essentielles : sans elles, une extraction qui echoue rendrait
-# deux chaines vides, egales, et le test passerait pour la mauvaise raison.
+# d'environnement resolues, la ou le defaut se trouvait reellement.
+# Les gardes `test -n` sont indispensables, et le cas de risque est ASYMETRIQUE
+# (mesure) : si UNE SEULE extraction echoue, `test "" != "27016"` est VRAI et le
+# check passerait a tort. Le cas ou les DEUX echouent, lui, echoue deja sans
+# garde (`test "" != ""` est faux) — ne pas retirer les gardes en croyant que
+# seul ce second cas etait vise.
 check "config: ports de jeu et de requete distincts EN ENV (defaut n2)" \
   sh -c '
     C=$(docker compose config)
@@ -883,7 +886,32 @@ stop_grace_period a 330s. Regles de jeu en override partiel versionne."
 - Consomme : les variables du contrat de la Tâche 4, et les chemins de la Tâche 3.
 - Produit : la fonction shell `log()`, les variables internes `DATA`, `GAME`, `PREFIX`, `SRV_PID`, `XVFB_PID`, `GRACE`. Les Tâches 6 et 7 étendent **ce même fichier** et réutilisent ces noms.
 
-- [ ] **Step 1: Ajouter les assertions de démarrage au harnais**
+- [ ] **Step 1: Corriger un commentaire trompeur du harnais**
+
+La revue de la Tâche 4 a établi que la justification écrite au-dessus des gardes
+`test -n` de l'assertion « ports distincts EN ENV » est **fausse**. Le commentaire
+dit que sans gardes, deux extractions vides seraient égales et le test passerait
+à tort. Mesuré : ce cas échoue déjà sans garde, `test "" != ""` étant faux.
+
+Le vrai cas de risque est **asymétrique** : si une seule extraction échoue,
+`test "" != "27016"` est vrai et le check passe à tort. Les gardes sont donc
+nécessaires, mais pas pour la raison documentée — et un commentaire faux est ce
+qui pousse quelqu'un à retirer une garde en croyant son risque inexistant.
+
+Dans `tests/verify.sh`, remplace ce commentaire par :
+
+```bash
+# Les gardes `test -n` sont indispensables, et le cas de risque est ASYMETRIQUE
+# (mesure) : si UNE SEULE extraction echoue, `test "" != "27016"` est VRAI et le
+# check passerait a tort. Le cas ou les DEUX echouent, lui, echoue deja sans
+# garde (`test "" != ""` est faux) — ne pas retirer les gardes en croyant que
+# seul ce second cas etait vise.
+```
+
+Ne touche pas au code de l'assertion : il est correct, seule son explication
+était fausse. Relance `./tests/verify.sh config` pour confirmer qu'il reste vert.
+
+- [ ] **Step 2: Ajouter les assertions de démarrage au harnais**
 
 ```bash
 echo
@@ -912,12 +940,12 @@ check_out "demarrage: processus serveur sous PUID (non root)" "uid=$PUID_ATTENDU
     'pid=$(pgrep -f VRisingServer.exe | head -1); [ -n "$pid" ] && sed -n "s/^Uid:[[:space:]]*\([0-9]*\).*/uid=\1/p" /proc/$pid/status'
 ```
 
-- [ ] **Step 2: Lancer le harnais pour constater l'échec**
+- [ ] **Step 3: Lancer le harnais pour constater l'échec**
 
 Run: `./tests/verify.sh demarrage`
 Expected: tous en `FAIL` — aucun conteneur ne tourne.
 
-- [ ] **Step 3: Écrire l'entrypoint**
+- [ ] **Step 4: Écrire l'entrypoint**
 
 Le serveur est lancé **en arrière-plan** et non par `exec` : c'est la condition nécessaire pour que la Tâche 7 puisse intercepter SIGTERM. C'est précisément ce que l'image communautaire ne faisait pas, d'où son `exit 137`.
 
@@ -983,7 +1011,7 @@ EOF
 chmod +x docker/entrypoint.sh
 ```
 
-- [ ] **Step 4: Câbler l'entrypoint dans le Dockerfile**
+- [ ] **Step 5: Câbler l'entrypoint dans le Dockerfile**
 
 Ajouter à la fin de l'étage `runtime` :
 
@@ -994,7 +1022,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 ```
 
-- [ ] **Step 5: Reconstruire et démarrer**
+- [ ] **Step 6: Reconstruire et démarrer**
 
 ```bash
 docker compose build
@@ -1010,14 +1038,14 @@ Expected: `PRET`.
 
 Si les logs du serveur n'apparaissent pas, `-logFile /dev/stdout` est refusé au processus non-root. Repli : faire écrire le serveur dans `"$DATA/../server.log"` et ajouter `tail -F` de ce fichier en arrière-plan avant le lancement.
 
-- [ ] **Step 6: Lancer le harnais**
+- [ ] **Step 7: Lancer le harnais**
 
 Run: `./tests/verify.sh demarrage`
 Expected: `PASS=6 FAIL=0`.
 
 Ces checks prouvent trois corrections d'un coup : nom effectif sans guillemets (défaut n°1), ports distincts (défaut n°2), et fichiers possédés par `PUID` au lieu de `root:root`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add docker/entrypoint.sh Dockerfile tests/verify.sh
