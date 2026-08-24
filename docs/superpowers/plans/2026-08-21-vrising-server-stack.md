@@ -433,6 +433,8 @@ check_out "runtime: utilisateur vrising en uid 10000" "uid=10000" \
 # le chemin d'installation reel, verifie present dans le builder et absent ici.
 check "runtime: steamcmd absent de l'image finale" \
   sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "ls -d /opt/steamcmd"'
+# NOTE: ces deux assertions par negation sont DURCIES au Step 1 de la Tache 4
+# (`check_absent`) — une negation confond « absent » et « sonde cassee ».
 # L'outillage de compilation ne doit pas non plus avoir survecu a COPY --from.
 check "runtime: outillage de build absent" \
   sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "command -v gcc || command -v make || command -v git"'
@@ -572,7 +574,73 @@ au runtime par l'entrypoint. Prefixe Wine initialise au build."
 - Consomme : l'image `vrising-server:local` (Tâche 3).
 - Produit : le service compose `vrising`, le conteneur `vrising-vrising-1`, et le contrat de variables que l'entrypoint (Tâches 5-7) consomme : `PUID`, `PGID`, `VRISING_ADMINS`, `VRISING_BANS`, `RCON_PASSWORD`, `SHUTDOWN_TIMEOUT`, plus toutes les `VR_*`.
 
-- [ ] **Step 1: Ajouter les assertions de configuration au harnais**
+- [ ] **Step 1: Durcir le harnais — remplacer les assertions par négation**
+
+Les Tâches 2 et 3 ont introduit des assertions de la forme
+`check "..." sh -c '! docker run ...'`. Elles sont **structurellement
+fragiles** : si `docker run` échoue pour une cause étrangère au fait testé
+(image mal nommée, démon arrêté, entrypoint cassé), la négation transforme cet
+échec en `PASS`. C'est la mécanique qui a produit quatre faux positifs sur ce
+projet.
+
+Ajoute cet assistant dans `tests/verify.sh`, juste après `check_out` :
+
+```bash
+# check_absent <nom> <commande...>
+# Pour affirmer qu'une chose est ABSENTE. La sonde doit s'executer ET ne rien
+# trouver. Codes de sortie MESURES sur ce projet :
+#   0        la chose existe            => FAIL
+#   1        elle est absente           => PASS
+#   125/127  la sonde n'a pas tourne    => FAIL, jamais un faux PASS
+# Une negation `! cmd` confondrait les deux derniers cas.
+check_absent() {
+  local name="$1"; shift
+  skip "$name" && return 0
+  local out rc
+  out="$("$@" 2>&1)"; rc=$?
+  case "$rc" in
+    0) printf '  FAIL  %s (present alors qu attendu absent)\n' "$name"
+       FAIL=$((FAIL+1)) ;;
+    1) printf '  PASS  %s\n' "$name"; PASS=$((PASS+1)) ;;
+    *) printf '  FAIL  %s (sonde inexploitable, exit %s: %s)\n' \
+         "$name" "$rc" "$(printf '%s' "$out" | head -1)"
+       FAIL=$((FAIL+1)) ;;
+  esac
+}
+```
+
+Puis remplace les deux assertions de la Tâche 3. Les sondes doivent rendre un
+code **déterministe** — `test -e` et la boucle `for` ci-dessous rendent 0 ou 1,
+là où `command -v gcc || command -v make || command -v git` rendait 127 quand
+rien n'est trouvé, exactement comme un entrypoint cassé :
+
+```bash
+check_absent "runtime: steamcmd absent de l'image finale" \
+  docker run --rm --entrypoint test vrising-server:local -e /opt/steamcmd
+check_absent "runtime: outillage de build absent" \
+  docker run --rm --entrypoint sh vrising-server:local -c \
+    'for b in gcc make git; do command -v "$b" >/dev/null 2>&1 && exit 0; done; exit 1'
+```
+
+Remplace de même l'assertion « config: port RCON jamais publie » du Step 3,
+qui souffre du même défaut.
+
+- [ ] **Step 2: Vérifier que le durcissement discrimine**
+
+```bash
+# Doit ECHOUER : /opt/steamcmd existe dans le builder
+docker run --rm --entrypoint test vrising-builder:test -e /opt/steamcmd; echo "exit=$? (0 attendu)"
+# Doit PASSER : absent du runtime
+docker run --rm --entrypoint test vrising-server:local -e /opt/steamcmd; echo "exit=$? (1 attendu)"
+# Sonde inexploitable : ni 0 ni 1
+docker run --rm --entrypoint /absent vrising-server:local; echo "exit=$? (127 attendu)"
+./tests/verify.sh runtime
+```
+
+Attendu : les trois codes de sortie conformes, et `./tests/verify.sh runtime`
+toujours vert.
+
+- [ ] **Step 3: Ajouter les assertions de configuration au harnais**
 
 ```bash
 echo
@@ -585,18 +653,20 @@ check "config: ports jeu et requete distincts" \
   sh -c 'test "$(docker compose config | grep -c "target: 2701[56]")" -eq 2'
 check_out "config: politique de redemarrage" "restart: unless-stopped" docker compose config
 check_out "config: delai de grace 330s" "stop_grace_period: 5m30s" docker compose config
-check "config: port RCON jamais publie" \
-  sh -c '! docker compose config | grep -q "25575"'
+# `grep -q` rend 1 quand rien n'est trouve : sonde deterministe, donc
+# check_absent discrimine correctement une vraie absence d'un echec de sonde.
+check_absent "config: port RCON jamais publie" \
+  sh -c 'docker compose config | grep -q "25575"'
 check "config: regles de jeu montees en lecture seule" \
   sh -c 'docker compose config | grep -q "read_only: true"'
 ```
 
-- [ ] **Step 2: Lancer le harnais pour constater l'échec**
+- [ ] **Step 4: Lancer le harnais pour constater l'échec**
 
 Run: `./tests/verify.sh config`
 Expected: tous les checks en `FAIL` — `compose.yaml` est encore l'ancien fichier.
 
-- [ ] **Step 3: Écrire le `.env.example`**
+- [ ] **Step 5: Écrire le `.env.example`**
 
 Les valeurs par défaut reprennent celles constatées dans le dump de configuration effective du serveur lors du spike.
 
@@ -675,7 +745,7 @@ EOF
 cp .env.example .env
 ```
 
-- [ ] **Step 4: Écrire les règles de jeu**
+- [ ] **Step 6: Écrire les règles de jeu**
 
 Override **partiel** : uniquement les écarts par rapport aux défauts du jeu, comme la documentation officielle l'autorise. `GameModeType` à `1` correspond à la valeur observée par défaut lors du spike ; l'ajuster selon le mode souhaité.
 
@@ -696,7 +766,7 @@ cat > config/ServerGameSettings.json <<'EOF'
 EOF
 ```
 
-- [ ] **Step 5: Réécrire le `compose.yaml`**
+- [ ] **Step 7: Réécrire le `compose.yaml`**
 
 Aucune valeur en dur, aucun guillemet autour des interpolations, port RCON absent.
 
@@ -750,14 +820,14 @@ services:
 EOF
 ```
 
-- [ ] **Step 6: Lancer le harnais**
+- [ ] **Step 8: Lancer le harnais**
 
 Run: `./tests/verify.sh config`
 Expected: `PASS=8 FAIL=0`.
 
 Ce test prouve la correction du défaut n°1 de la spec : `VR_SERVER_NAME: Serveur de test`, **sans** guillemets parasites — à comparer au `'"VRising Containerized"'` mesuré sur l'ancien fichier.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add .env.example compose.yaml config/ServerGameSettings.json tests/verify.sh
