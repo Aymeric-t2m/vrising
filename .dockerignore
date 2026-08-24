@@ -1,0 +1,7 @@
+.git
+.tmp
+.env
+vrising-persistent-data
+docs
+tests
+README.md
