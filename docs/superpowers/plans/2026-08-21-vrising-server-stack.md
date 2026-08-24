@@ -647,10 +647,26 @@ echo
 echo "== Configuration =="
 check_out "config: nom sans guillemets parasites" "VR_SERVER_NAME: Serveur de test" \
   docker compose config
-check_out "config: port de jeu 27015" "target: 27015" docker compose config
-check_out "config: port de requete 27016" "target: 27016" docker compose config
-check "config: ports jeu et requete distincts" \
+# ATTENTION sur le nommage : ces deux assertions testent les ports PUBLIES,
+# que l'ancien compose defectueux publiait deja correctement (27015 et 27016).
+# Elles ne couvrent donc PAS le defaut n2, qui vivait dans les variables d'env
+# (QUERY_PORT=27015, identique a GAME_PORT). Nommees en consequence.
+check_out "config: port de jeu publie 27015" "target: 27015" docker compose config
+check_out "config: port de requete publie 27016" "target: 27016" docker compose config
+check "config: deux ports UDP publies et pas plus" \
   sh -c 'test "$(docker compose config | grep -c "target: 2701[56]")" -eq 2'
+
+# C'EST CETTE ASSERTION qui couvre le defaut n2. Elle porte sur les variables
+# d'environnement resolues, la ou le defaut se trouvait reellement. Les gardes
+# `test -n` sont essentielles : sans elles, une extraction qui echoue rendrait
+# deux chaines vides, egales, et le test passerait pour la mauvaise raison.
+check "config: ports de jeu et de requete distincts EN ENV (defaut n2)" \
+  sh -c '
+    C=$(docker compose config)
+    G=$(printf "%s" "$C" | sed -n "s/^ *VR_GAME_PORT: *\"\?\([0-9]\+\)\"\?/\1/p")
+    Q=$(printf "%s" "$C" | sed -n "s/^ *VR_QUERY_PORT: *\"\?\([0-9]\+\)\"\?/\1/p")
+    test -n "$G" && test -n "$Q" && test "$G" != "$Q"
+  '
 check_out "config: politique de redemarrage" "restart: unless-stopped" docker compose config
 check_out "config: delai de grace 330s" "stop_grace_period: 5m30s" docker compose config
 # `grep -q` rend 1 quand rien n'est trouve : sonde deterministe, donc
@@ -664,7 +680,22 @@ check "config: regles de jeu montees en lecture seule" \
 - [ ] **Step 4: Lancer le harnais pour constater l'échec**
 
 Run: `./tests/verify.sh config`
-Expected: tous les checks en `FAIL` — `compose.yaml` est encore l'ancien fichier.
+
+Attendu : **4 `FAIL` et 5 `PASS`**, et non l'inverse. Les `PASS` ne sont pas des
+succès : l'ancien fichier publiait déjà les ports 27015 et 27016 correctement,
+donc les assertions sur les ports *publiés* passent sur lui aussi. Ce qui doit
+échouer, et qui documente les défauts :
+
+- « nom sans guillemets parasites » — la valeur effective de l'ancien fichier
+  est `'"VRising Containerized"'`, guillemets compris : c'est le défaut n°1
+- « ports de jeu et de requete distincts EN ENV » — l'ancien a
+  `QUERY_PORT=27015`, identique à `GAME_PORT` : c'est le défaut n°2
+- « politique de redemarrage » — absente de l'ancien : défaut n°3
+- « delai de grace 330s » et « regles de jeu montees en lecture seule » —
+  absentes de l'ancien
+
+Si l'assertion « ports distincts EN ENV » **passe** sur l'ancien fichier, elle
+est cassée : signale-le au lieu de continuer.
 
 - [ ] **Step 5: Écrire le `.env.example`**
 
