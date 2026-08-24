@@ -427,8 +427,15 @@ check_out "runtime: prefixe Wine initialise" "system.reg" \
   docker run --rm --entrypoint ls vrising-server:local /opt/vrising/.wine
 check_out "runtime: utilisateur vrising en uid 10000" "uid=10000" \
   docker run --rm --entrypoint id vrising-server:local vrising
+# `command -v steamcmd` est INTROUVABLE meme dans le builder, ou steamcmd
+# existe pourtant a /opt/steamcmd/steamcmd.sh : il n'est jamais sur le PATH.
+# L'assertion passait donc dans les DEUX images sans rien discriminer. On teste
+# le chemin d'installation reel, verifie present dans le builder et absent ici.
 check "runtime: steamcmd absent de l'image finale" \
-  sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "command -v steamcmd"'
+  sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "ls -d /opt/steamcmd"'
+# L'outillage de compilation ne doit pas non plus avoir survecu a COPY --from.
+check "runtime: outillage de build absent" \
+  sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "command -v gcc || command -v make || command -v git"'
 check_out "runtime: prefixe Wine possede par vrising" "10000" \
   docker run --rm --entrypoint stat vrising-server:local -c %u /opt/vrising/.wine
 ```
@@ -520,13 +527,23 @@ Si `wineboot --init` échoue faute de display, ajouter `xvfb-run -a` devant : `x
 Run: `./tests/verify.sh runtime`
 Expected: `PASS=7 FAIL=0` sur le filtre runtime.
 
-- [ ] **Step 6: Vérifier le gain de l'approche multi-étages**
+- [ ] **Step 6: Constater la taille réelle et vérifier ce que le multi-étages apporte vraiment**
 
 ```bash
-docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep -E 'vrising-(builder|server)'
+docker system df -v 2>/dev/null | grep -E "^vrising|REPOSITORY"
 ```
 
-Attendu : `vrising-server:local` sensiblement plus petite que `vrising-builder:test`, steamcmd et ses paquets i386 n'y figurant pas.
+**Ne compare pas la taille du runtime à celle du builder** : le builder ne
+contient pas Wine, la comparaison ne mesurerait rien. Mesuré en pratique, le
+runtime est *plus gros* que le builder (7,42 Go contre 3,23 Go), parce que Wine
+tire ~180 paquets i386 et que le préfixe initialisé pèse ~1,45 Go de DLL WoW64.
+
+Ce que le multi-étages apporte réellement est vérifié par les deux assertions du
+harnais : **steamcmd et l'outillage de compilation sont absents de l'image
+finale**. C'est cela le bénéfice — une surface réduite, pas une image petite.
+
+Note l'ordre de grandeur pour la documentation de déploiement (Tâche 8) : image
+finale ~7,4 Go, et un cache de build d'environ 10 Go qui reste sur le disque.
 
 - [ ] **Step 7: Commit**
 
@@ -1228,8 +1245,14 @@ Le binaire serveur est un exécutable Windows exécute sous Wine.
 
 ## Prérequis
 
-Debian avec Docker et le plugin Compose. Compter environ 4 Go de disque
-(image et fichiers du jeu) et 2 Go de téléchargement au premier build.
+Debian avec Docker et le plugin Compose. Prévoir :
+
+- **~7,5 Go** pour l'image finale
+- **~10 Go supplémentaires** de cache de build, qui restent sur le disque après
+  la construction — `docker builder prune` les récupère
+- **~2 Go de téléchargement** au premier build (les fichiers du jeu)
+
+Soit une vingtaine de gigaoctets disponibles pour construire confortablement.
 
 ## Installation
 
