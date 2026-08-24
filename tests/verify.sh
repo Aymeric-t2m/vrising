@@ -46,6 +46,25 @@ check_out "builder: mcrcon compile" "Usage: mcrcon" \
   docker run --rm vrising-builder:test /usr/local/bin/mcrcon -h
 
 echo
+echo "== Etage runtime =="
+# --entrypoint est obligatoire : la Tache 5 ajoute un ENTRYPOINT qui ignore
+# les arguments, ces checks casseraient sinon des la Tache 5.
+check_out "runtime: wine epingle en 10.0" "wine-10.0" \
+  docker run --rm --entrypoint wine vrising-server:local --version
+check_out "runtime: jeu present" "VRisingServer.exe" \
+  docker run --rm --entrypoint ls vrising-server:local /opt/vrising/game
+check_out "runtime: mcrcon present" "Usage: mcrcon" \
+  docker run --rm --entrypoint mcrcon vrising-server:local -h
+check_out "runtime: prefixe Wine initialise" "system.reg" \
+  docker run --rm --entrypoint ls vrising-server:local /opt/vrising/.wine
+check_out "runtime: utilisateur vrising en uid 10000" "uid=10000" \
+  docker run --rm --entrypoint id vrising-server:local vrising
+check "runtime: steamcmd absent de l'image finale" \
+  sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "command -v steamcmd"'
+check_out "runtime: prefixe Wine possede par vrising" "10000" \
+  docker run --rm --entrypoint stat vrising-server:local -c %u /opt/vrising/.wine
+
+echo
 printf 'PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
 
 # Un filtre mal orthographie ne doit pas passer pour un succes.
