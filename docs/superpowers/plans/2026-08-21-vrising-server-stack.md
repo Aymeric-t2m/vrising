@@ -90,10 +90,12 @@ make -C /src
 cp /src/mcrcon /out/mcrcon
 '
 chmod +x .tmp/mcrcon
-./.tmp/mcrcon --version
+./.tmp/mcrcon -h
 ```
 
-Attendu : la version de mcrcon s'affiche, sans erreur de bibliothèque manquante.
+Attendu : `Usage: mcrcon [OPTIONS] [COMMANDS]` s'affiche, sans erreur de
+bibliothèque manquante. (`--version` n'existe pas dans mcrcon : l'invoquer
+renvoie « invalid option ».)
 
 - [ ] **Step 3: Écrire l'override jetable qui active RCON**
 
@@ -271,8 +273,12 @@ check_out() {
 echo "== Etage builder =="
 check_out "builder: VRisingServer.exe present" "VRisingServer.exe" \
   docker run --rm vrising-builder:test ls /game
-check_out "builder: mcrcon compile" "mcrcon" \
-  docker run --rm vrising-builder:test /usr/local/bin/mcrcon --version
+# `--version` n'existe pas dans mcrcon : l'invoquer renvoie « invalid option »,
+# dont le texte contient « mcrcon » — l'assertion passait donc sans rien prouver.
+# `-h` est une invocation valide : elle prouve que le binaire s'execute et
+# analyse ses options.
+check_out "builder: mcrcon compile" "Usage: mcrcon" \
+  docker run --rm vrising-builder:test /usr/local/bin/mcrcon -h
 
 echo
 printf 'PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
@@ -413,8 +419,8 @@ check_out "runtime: wine epingle en 10.0" "wine-10.0" \
   docker run --rm --entrypoint wine vrising-server:local --version
 check_out "runtime: jeu present" "VRisingServer.exe" \
   docker run --rm --entrypoint ls vrising-server:local /opt/vrising/game
-check_out "runtime: mcrcon present" "mcrcon" \
-  docker run --rm --entrypoint mcrcon vrising-server:local --version
+check_out "runtime: mcrcon present" "Usage: mcrcon" \
+  docker run --rm --entrypoint mcrcon vrising-server:local -h
 check_out "runtime: prefixe Wine initialise" "system.reg" \
   docker run --rm --entrypoint ls vrising-server:local /opt/vrising/.wine
 check_out "runtime: utilisateur vrising en uid 10000" "uid=10000" \
