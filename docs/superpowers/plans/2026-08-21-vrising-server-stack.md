@@ -403,6 +403,8 @@ mcrcon v0.7.2 compile pour l'arret propre."
   - volume de données : `/opt/vrising/save-data`
   - utilisateur interne : `vrising`, uid/gid **fixes** `10000`
   - `mcrcon` sur le `PATH`
+  - `pgrep` disponible (paquet `procps`), requis par l'assertion non-root de la
+    Tâche 5
 
 **Décision d'architecture à respecter.** L'uid interne est **fixe** (`10000`) et non un `ARG` de build, parce que la spec exige `PUID`/`PGID` configurables **au runtime** : un `ARG` imposerait un rebuild à chaque changement. L'entrypoint (Tâche 5) ajustera les droits au démarrage. Le répertoire du jeu reste `root:root` en mode `755` : il est uniquement lu, jamais écrit (les écritures vont dans `-persistentDataPath`), ce qui évite un `chown -R` de 2 Go à chaque démarrage.
 
@@ -451,6 +453,10 @@ ARG WINE_VERSION=10.0.0.0~bookworm-1
 ARG RUNTIME_UID=10000
 ARG RUNTIME_GID=10000
 
+# procps fournit pgrep, dont l'assertion « processus serveur non-root » de la
+# Tache 5 a besoin, et donne a l'exploitant un `ps` utilisable pour diagnostiquer
+# en production. debian:12-slim ne l'inclut pas.
+
 ENV WINEPREFIX=/opt/vrising/.wine \
     WINEDEBUG=-all \
     HOME=/opt/vrising \
@@ -462,7 +468,7 @@ ENV WINEPREFIX=/opt/vrising/.wine \
 RUN dpkg --add-architecture i386 \
  && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates wget xvfb tzdata \
+      ca-certificates wget xvfb tzdata procps \
  && mkdir -pm755 /etc/apt/keyrings \
  && wget -q -O /etc/apt/keyrings/winehq-archive.key \
       https://dl.winehq.org/wine-builds/winehq.key \
@@ -774,8 +780,18 @@ check_out "demarrage: port de requete effectif" '"QueryPort": 27016' \
   sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
 check "demarrage: volume possede par PUID et non root" \
   sh -c 'test "$(stat -c %u vrising-persistent-data/Settings)" = "$(. ./.env; echo $PUID)"'
-check "demarrage: processus serveur non-root" \
-  sh -c '! docker compose exec -T vrising sh -c "ps -o user= -C VRisingServer.exe" | grep -q root'
+# Assertion POSITIVE et non negative. La forme negative initialement prevue
+# (`! ps ... | grep -q root`) etait un faux positif : si `ps` echouait, `grep` ne
+# trouvait rien et la negation rendait vrai — le check passait sans rien prouver.
+# On lit donc l'uid reel et on exige qu'il vaille PUID.
+# `pgrep -f` et non `ps -C` : "VRisingServer.exe" fait 17 caracteres alors que
+# `comm` est tronque a 15, donc `ps -C VRisingServer.exe` ne matcherait jamais.
+# Si le processus est absent, la sortie est vide et le check ECHOUE — ce qui est
+# le comportement voulu.
+PUID_ATTENDU=$(. ./.env 2>/dev/null; echo "${PUID:-1000}")
+check_out "demarrage: processus serveur sous PUID (non root)" "uid=$PUID_ATTENDU" \
+  docker compose exec -T vrising sh -c \
+    'pid=$(pgrep -f VRisingServer.exe | head -1); [ -n "$pid" ] && sed -n "s/^Uid:[[:space:]]*\([0-9]*\).*/uid=\1/p" /proc/$pid/status'
 ```
 
 - [ ] **Step 2: Lancer le harnais pour constater l'échec**
