@@ -1,18 +1,45 @@
 services:
   vrising:
-    image: sknnr/vrising-dedicated-server:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vrising-server:local
+    restart: unless-stopped
+    # Strictement superieur au SHUTDOWN_TIMEOUT de l'entrypoint (300s), pour que
+    # Docker ne tue jamais le conteneur avant la fin de l'arret ordonne.
+    # ~220s mesures en Tache 1 ; la marge couvre un serveur peuple.
+    stop_grace_period: 330s
     ports:
-      - "27015:27015/udp"
-      - "27016:27016/udp"
+      - "${VR_GAME_PORT}:${VR_GAME_PORT}/udp"
+      - "${VR_QUERY_PORT}:${VR_QUERY_PORT}/udp"
     environment:
-      - SERVER_NAME="VRising Containerized"
-      - SERVER_PASSWORD="PleaseChangeMe"
-      - GAME_PORT=27015
-      - QUERY_PORT=27015
-      - DESCRIPTION="A VRising Server"
-      - BIND_ADDRESS=0.0.0.0
-      - HIDE_IP=true
-      - LOWER_FPS_EMPTY=true
-      - SECURE=true
+      VR_SERVER_NAME: ${VR_SERVER_NAME}
+      VR_DESCRIPTION: ${VR_DESCRIPTION}
+      VR_PASSWORD: ${VR_PASSWORD}
+      VR_GAME_PORT: ${VR_GAME_PORT}
+      VR_QUERY_PORT: ${VR_QUERY_PORT}
+      VR_BIND_ADDRESS: ${VR_BIND_ADDRESS}
+      VR_LIST_ON_EOS: ${VR_LIST_ON_EOS}
+      VR_LIST_ON_STEAM: ${VR_LIST_ON_STEAM}
+      VR_HIDE_IP_ADDRESS: ${VR_HIDE_IP_ADDRESS}
+      VR_SECURE: ${VR_SECURE}
+      VR_MAX_USERS: ${VR_MAX_USERS}
+      VR_LOWER_FPS_WHEN_EMPTY: ${VR_LOWER_FPS_WHEN_EMPTY}
+      VR_SAVE_NAME: ${VR_SAVE_NAME}
+      VR_SAVE_COUNT: ${VR_SAVE_COUNT}
+      VR_SAVE_INTERVAL: ${VR_SAVE_INTERVAL}
+      VR_PRESET: ${VR_PRESET}
+      VR_DIFFICULTY_PRESET: ${VR_DIFFICULTY_PRESET}
+      PUID: ${PUID}
+      PGID: ${PGID}
+      VRISING_ADMINS: ${VRISING_ADMINS}
+      VRISING_BANS: ${VRISING_BANS}
+      RCON_PASSWORD: ${RCON_PASSWORD}
+      SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT}
+      TZ: ${TZ}
     volumes:
-      - ./vrising-persistent-data:/opt/steam/vrising/save-data
+      - ./vrising-persistent-data:/opt/vrising/save-data
+      - type: bind
+        source: ./config/ServerGameSettings.json
+        target: /config/ServerGameSettings.json
+        read_only: true

@@ -1,0 +1,11 @@
+{
+  "GameModeType": 1,
+  "CastleDamageMode": 2,
+  "PlayerDamageMode": 1,
+  "VSCompetitiveMode": false,
+  "InactivityKillEnabled": true,
+  "ClanSize": 4,
+  "InventoryStacksModifier": 1.0,
+  "MaterialYieldModifier_Global": 1.5,
+  "UnitStatModifier_Global": 1.0
+}

@@ -35,6 +35,28 @@ check_out() {
   fi
 }
 
+# check_absent <nom> <commande...>
+# Pour affirmer qu'une chose est ABSENTE. La sonde doit s'executer ET ne rien
+# trouver. Codes de sortie MESURES sur ce projet :
+#   0        la chose existe            => FAIL
+#   1        elle est absente           => PASS
+#   125/127  la sonde n'a pas tourne    => FAIL, jamais un faux PASS
+# Une negation `! cmd` confondrait les deux derniers cas.
+check_absent() {
+  local name="$1"; shift
+  skip "$name" && return 0
+  local out rc
+  out="$("$@" 2>&1)"; rc=$?
+  case "$rc" in
+    0) printf '  FAIL  %s (present alors qu attendu absent)\n' "$name"
+       FAIL=$((FAIL+1)) ;;
+    1) printf '  PASS  %s\n' "$name"; PASS=$((PASS+1)) ;;
+    *) printf '  FAIL  %s (sonde inexploitable, exit %s: %s)\n' \
+         "$name" "$rc" "$(printf '%s' "$out" | head -1)"
+       FAIL=$((FAIL+1)) ;;
+  esac
+}
+
 echo "== Etage builder =="
 check_out "builder: VRisingServer.exe present" "VRisingServer.exe" \
   docker run --rm vrising-builder:test ls /game
@@ -63,13 +85,31 @@ check_out "runtime: utilisateur vrising en uid 10000" "uid=10000" \
 # existe pourtant a /opt/steamcmd/steamcmd.sh : il n'est jamais sur le PATH.
 # L'assertion passait donc dans les DEUX images sans rien discriminer. On teste
 # le chemin d'installation reel, verifie present dans le builder et absent ici.
-check "runtime: steamcmd absent de l'image finale" \
-  sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "ls -d /opt/steamcmd"'
+check_absent "runtime: steamcmd absent de l'image finale" \
+  docker run --rm --entrypoint test vrising-server:local -e /opt/steamcmd
 # L'outillage de compilation ne doit pas non plus avoir survecu a COPY --from.
-check "runtime: outillage de build absent" \
-  sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "command -v gcc || command -v make || command -v git"'
+check_absent "runtime: outillage de build absent" \
+  docker run --rm --entrypoint sh vrising-server:local -c \
+    'for b in gcc make git; do command -v "$b" >/dev/null 2>&1 && exit 0; done; exit 1'
 check_out "runtime: prefixe Wine possede par vrising" "10000" \
   docker run --rm --entrypoint stat vrising-server:local -c %u /opt/vrising/.wine
+
+echo
+echo "== Configuration =="
+check_out "config: nom sans guillemets parasites" "VR_SERVER_NAME: Serveur de test" \
+  docker compose config
+check_out "config: port de jeu 27015" "target: 27015" docker compose config
+check_out "config: port de requete 27016" "target: 27016" docker compose config
+check "config: ports jeu et requete distincts" \
+  sh -c 'test "$(docker compose config | grep -c "target: 2701[56]")" -eq 2'
+check_out "config: politique de redemarrage" "restart: unless-stopped" docker compose config
+check_out "config: delai de grace 330s" "stop_grace_period: 5m30s" docker compose config
+# `grep -q` rend 1 quand rien n'est trouve : sonde deterministe, donc
+# check_absent discrimine correctement une vraie absence d'un echec de sonde.
+check_absent "config: port RCON jamais publie" \
+  sh -c 'docker compose config | grep -q "25575"'
+check "config: regles de jeu montees en lecture seule" \
+  sh -c 'docker compose config | grep -q "read_only: true"'
 
 echo
 printf 'PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
