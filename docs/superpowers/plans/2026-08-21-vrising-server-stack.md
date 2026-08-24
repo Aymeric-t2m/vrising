@@ -425,7 +425,9 @@ check_out "runtime: mcrcon present" "Usage: mcrcon" \
   docker run --rm --entrypoint mcrcon vrising-server:local -h
 check_out "runtime: prefixe Wine initialise" "system.reg" \
   docker run --rm --entrypoint ls vrising-server:local /opt/vrising/.wine
-check_out "runtime: utilisateur vrising en uid 10000" "uid=10000" \
+# uid 1000 et non un uid haut : voir le commentaire du Dockerfile — il doit
+# correspondre au PUID par defaut pour eviter un copy-up de 1,4 Go au demarrage.
+check_out "runtime: utilisateur vrising en uid 1000" "uid=1000" \
   docker run --rm --entrypoint id vrising-server:local vrising
 # `command -v steamcmd` est INTROUVABLE meme dans le builder, ou steamcmd
 # existe pourtant a /opt/steamcmd/steamcmd.sh : il n'est jamais sur le PATH.
@@ -438,7 +440,7 @@ check "runtime: steamcmd absent de l'image finale" \
 # L'outillage de compilation ne doit pas non plus avoir survecu a COPY --from.
 check "runtime: outillage de build absent" \
   sh -c '! docker run --rm --entrypoint sh vrising-server:local -c "command -v gcc || command -v make || command -v git"'
-check_out "runtime: prefixe Wine possede par vrising" "10000" \
+check_out "runtime: prefixe Wine possede par vrising" "1000" \
   docker run --rm --entrypoint stat vrising-server:local -c %u /opt/vrising/.wine
 ```
 
@@ -459,8 +461,13 @@ Ajouter à la fin du `Dockerfile`. Noter l'incantation apt : les quatre paquets 
 FROM debian:12-slim AS runtime
 
 ARG WINE_VERSION=10.0.0.0~bookworm-1
-ARG RUNTIME_UID=10000
-ARG RUNTIME_GID=10000
+# 1000 et non un uid haut : il DOIT correspondre au PUID par defaut, sinon
+# l'entrypoint chowne le prefixe Wine a chaque demarrage. Or sur overlayfs, un
+# chown sur des fichiers d'une couche en lecture seule force un COPY-UP : 1,4 Go
+# recopies dans la couche inscriptible, mesure a plusieurs minutes en etat D
+# (attente d'E/S). Avec 1000, la garde de l'entrypoint saute le chown.
+ARG RUNTIME_UID=1000
+ARG RUNTIME_GID=1000
 
 # procps fournit pgrep, dont l'assertion « processus serveur non-root » de la
 # Tache 5 a besoin, et donne a l'exploitant un `ps` utilisable pour diagnostiquer
@@ -755,6 +762,12 @@ VR_DIFFICULTY_PRESET=
 # --- Specifique a cette image (pas des variables du jeu) --------------------
 # Proprietaire des fichiers de sauvegarde sur l'hote. Mettre l'uid/gid de ton
 # compte : `id -u` et `id -g`.
+# NOTE DE PERFORMANCE : l'image construit son utilisateur interne en uid 1000.
+# Si ton PUID vaut 1000 (cas courant du premier compte Debian), le demarrage est
+# immediat. S'il differe, l'entrypoint doit chowner le prefixe Wine, ce qui
+# force un copy-up overlayfs de 1,4 Go et ajoute plusieurs minutes A CHAQUE
+# recreation du conteneur. Pour l'eviter, reconstruire l'image avec ton uid :
+#   docker compose build --build-arg RUNTIME_UID=$(id -u) --build-arg RUNTIME_GID=$(id -g)
 PUID=1000
 PGID=1000
 
@@ -976,9 +989,15 @@ log "ajustement des droits vers ${PUID}:${PGID}"
 install -d -o "$PUID" -g "$PGID" -m 0755 "$DATA" "$DATA/Settings" "$DATA/Saves"
 chown "$PUID:$PGID" "$DATA" "$DATA/Settings" "$DATA/Saves"
 
+# Ce chown est COUTEUX : sur overlayfs il force un copy-up de ~1,4 Go, soit
+# plusieurs minutes. Il ne se declenche que si PUID differe de l'uid de
+# construction de l'image (1000 par defaut). Voir la note du .env.example.
 if [ "$(stat -c %u "$PREFIX")" != "$PUID" ]; then
-  log "reattribution du prefixe Wine a ${PUID}:${PGID}"
+  log "ATTENTION: reattribution du prefixe Wine a ${PUID}:${PGID}"
+  log "  copy-up overlayfs de ~1,4 Go, comptez plusieurs minutes."
+  log "  pour l'eviter: reconstruire avec --build-arg RUNTIME_UID=${PUID}"
   chown -R "$PUID:$PGID" "$PREFIX"
+  log "reattribution terminee"
 fi
 
 # --- Serveur ----------------------------------------------------------------
