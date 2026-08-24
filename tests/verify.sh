@@ -38,8 +38,12 @@ check_out() {
 echo "== Etage builder =="
 check_out "builder: VRisingServer.exe present" "VRisingServer.exe" \
   docker run --rm vrising-builder:test ls /game
-check_out "builder: mcrcon compile" "mcrcon" \
-  docker run --rm vrising-builder:test /usr/local/bin/mcrcon --version
+# `--version` n'existe pas dans mcrcon : l'invoquer renvoie « invalid option »,
+# dont le texte contient « mcrcon » -- l'assertion passait donc sans rien prouver.
+# `-h` est une invocation valide : elle prouve que le binaire s'execute et
+# analyse ses options.
+check_out "builder: mcrcon compile" "Usage: mcrcon" \
+  docker run --rm vrising-builder:test /usr/local/bin/mcrcon -h
 
 echo
 printf 'PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
