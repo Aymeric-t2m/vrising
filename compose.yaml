@@ -39,7 +39,13 @@ services:
       TZ: ${TZ}
     volumes:
       - ./vrising-persistent-data:/opt/vrising/save-data
+      # Le prefixe Wine ne peut pas etre utilise depuis la couche image (crash
+      # mesure). L entrypoint y copie le prefixe au premier demarrage.
+      - wine-prefix:/opt/vrising/.wine-run
       - type: bind
         source: ./config/ServerGameSettings.json
         target: /config/ServerGameSettings.json
         read_only: true
+
+volumes:
+  wine-prefix:

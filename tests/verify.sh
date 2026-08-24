@@ -79,7 +79,9 @@ check_out "runtime: mcrcon present" "Usage: mcrcon" \
   docker run --rm --entrypoint mcrcon vrising-server:local -h
 check_out "runtime: prefixe Wine initialise" "system.reg" \
   docker run --rm --entrypoint ls vrising-server:local /opt/vrising/.wine
-check_out "runtime: utilisateur vrising en uid 10000" "uid=10000" \
+# uid 1000 et non un uid haut : voir le commentaire du Dockerfile — il doit
+# correspondre au PUID par defaut pour eviter un copy-up de 1,4 Go au demarrage.
+check_out "runtime: utilisateur vrising en uid 1000" "uid=1000" \
   docker run --rm --entrypoint id vrising-server:local vrising
 # `command -v steamcmd` est INTROUVABLE meme dans le builder, ou steamcmd
 # existe pourtant a /opt/steamcmd/steamcmd.sh : il n'est jamais sur le PATH.
@@ -91,7 +93,7 @@ check_absent "runtime: steamcmd absent de l'image finale" \
 check_absent "runtime: outillage de build absent" \
   docker run --rm --entrypoint sh vrising-server:local -c \
     'for b in gcc make git; do command -v "$b" >/dev/null 2>&1 && exit 0; done; exit 1'
-check_out "runtime: prefixe Wine possede par vrising" "10000" \
+check_out "runtime: prefixe Wine possede par vrising" "1000" \
   docker run --rm --entrypoint stat vrising-server:local -c %u /opt/vrising/.wine
 
 echo
@@ -108,9 +110,12 @@ check "config: deux ports UDP publies et pas plus" \
   sh -c 'test "$(docker compose config | grep -c "target: 2701[56]")" -eq 2'
 
 # C'EST CETTE ASSERTION qui couvre le defaut n2. Elle porte sur les variables
-# d'environnement resolues, la ou le defaut se trouvait reellement. Les gardes
-# `test -n` sont essentielles : sans elles, une extraction qui echoue rendrait
-# deux chaines vides, egales, et le test passerait pour la mauvaise raison.
+# d'environnement resolues, la ou le defaut se trouvait reellement.
+# Les gardes `test -n` sont indispensables, et le cas de risque est ASYMETRIQUE
+# (mesure) : si UNE SEULE extraction echoue, `test "" != "27016"` est VRAI et le
+# check passerait a tort. Le cas ou les DEUX echouent, lui, echoue deja sans
+# garde (`test "" != ""` est faux) — ne pas retirer les gardes en croyant que
+# seul ce second cas etait vise.
 check "config: ports de jeu et de requete distincts EN ENV (defaut n2)" \
   sh -c '
     C=$(docker compose config)
@@ -126,6 +131,65 @@ check_absent "config: port RCON jamais publie" \
   sh -c 'docker compose config | grep -q "25575"'
 check "config: regles de jeu montees en lecture seule" \
   sh -c 'docker compose config | grep -q "read_only: true"'
+
+echo
+echo "== Demarrage =="
+check_out "demarrage: serveur pret" "Server Setup Complete" \
+  sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
+check_out "demarrage: nom effectif sans guillemets" '"Name": "Serveur de test"' \
+  sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
+check_out "demarrage: port de jeu effectif" '"Port": 27015' \
+  sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
+check_out "demarrage: port de requete effectif" '"QueryPort": 27016' \
+  sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
+check "demarrage: volume possede par PUID et non root" \
+  sh -c 'test "$(stat -c %u vrising-persistent-data/Settings)" = "$(. ./.env; echo $PUID)"'
+# Le check ci-dessus ne porte que sur les REPERTOIRES, les seuls que l'entrypoint
+# chownait. Le defaut vivait dans les FICHIERS : banlist.txt et consorts, laisses
+# a root par un demarrage anterieur, faisaient lever au serveur
+# « UnauthorizedAccessException: Access to the path ...banlist.txt is denied »
+# puis planter (exit 3). D'ou cette assertion recursive.
+# La premiere ligne garantit que la sonde a bien enumere quelque chose : sans
+# elle, un `find` en echec rendrait une liste vide, donc un PASS mensonger.
+check "demarrage: aucun fichier du volume laisse a un autre uid que PUID" \
+  sh -c '
+    P=$(. ./.env; echo "${PUID:-1000}")
+    test -n "$(find vrising-persistent-data -type f -print -quit)" || exit 1
+    test -z "$(find vrising-persistent-data ! -uid "$P" -print -quit)"
+  '
+
+# Avec restart: unless-stopped, un conteneur qui ne sait pas repartir boucle
+# indefiniment. Mesure du defaut : Xvfb laisse /tmp/.X1-lock dans la couche du
+# conteneur ; au redemarrage suivant il refuse de demarrer, et le serveur sort
+# aussitot sur « Failed to create batch mode window » (exit 1).
+# On lit les journaux DEPUIS le restart uniquement (--since), sinon le
+# « Server Setup Complete » du demarrage precedent ferait passer le check sans
+# rien prouver.
+check "redemarrage: le serveur repart apres un restart du conteneur" \
+  sh -c '
+    SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    docker compose restart >/dev/null 2>&1 || exit 1
+    i=0
+    while [ "$i" -lt 48 ]; do
+      L=$(docker compose logs --since "$SINCE" 2>&1 | sed "s/\x1b\[[0-9;]*m//g")
+      printf "%s" "$L" | grep -qF "Server Setup Complete" && exit 0
+      printf "%s" "$L" | grep -qF "Failed to create batch mode window" && exit 1
+      sleep 5; i=$((i+1))
+    done
+    exit 1
+  '
+# Assertion POSITIVE et non negative. La forme negative initialement prevue
+# (`! ps ... | grep -q root`) etait un faux positif : si `ps` echouait, `grep` ne
+# trouvait rien et la negation rendait vrai — le check passait sans rien prouver.
+# On lit donc l'uid reel et on exige qu'il vaille PUID.
+# `pgrep -f` et non `ps -C` : "VRisingServer.exe" fait 17 caracteres alors que
+# `comm` est tronque a 15, donc `ps -C VRisingServer.exe` ne matcherait jamais.
+# Si le processus est absent, la sortie est vide et le check ECHOUE — ce qui est
+# le comportement voulu.
+PUID_ATTENDU=$(. ./.env 2>/dev/null; echo "${PUID:-1000}")
+check_out "demarrage: processus serveur sous PUID (non root)" "uid=$PUID_ATTENDU" \
+  docker compose exec -T vrising sh -c \
+    'pid=$(pgrep -f VRisingServer.exe | head -1); [ -n "$pid" ] && sed -n "s/^Uid:[[:space:]]*\([0-9]*\).*/uid=\1/p" /proc/$pid/status'
 
 echo
 printf 'PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
