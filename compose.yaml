@@ -41,11 +41,11 @@ services:
       - ./vrising-persistent-data:/opt/vrising/save-data
       # Le prefixe Wine ne peut pas etre utilise depuis la couche image (crash
       # mesure). L entrypoint y copie le prefixe au premier demarrage.
-      - wine-prefix:/opt/vrising/.wine-run
+      # Bind mount et non volume nomme : l image ne fournit aucun contenu sous
+      # .wine-run, donc rien a auto-peupler et les deux sont equivalents au
+      # runtime. Ces ~1,4 Go sont exclus du contexte de build (.dockerignore).
+      - ./vrising-wine-prefix:/opt/vrising/.wine-run
       - type: bind
         source: ./config/ServerGameSettings.json
         target: /config/ServerGameSettings.json
         read_only: true
-
-volumes:
-  wine-prefix:
