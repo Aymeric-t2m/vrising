@@ -1,0 +1,86 @@
+# Serveur V Rising conteneurisé
+
+Stack Docker pour héberger un serveur dédié V Rising. Le serveur du jeu n'existe
+qu'en binaire Windows : il tourne ici sous **Wine**, dans une image Debian, avec
+un affichage virtuel Xvfb.
+
+En production sur un VPS IONOS (`root@217.160.98.201`), fichiers dans `/root`.
+
+> L'auto-hébergement depuis un réseau domestique a été étudié puis écarté le
+> 2026-08-25 : héberger chez soi expose l'IP publique du foyer à chaque joueur
+> connecté, ce qu'aucune règle de pare-feu ne corrige. Le VPS absorbe ce risque.
+
+## Structure
+
+| Chemin | Rôle |
+|---|---|
+| [`Dockerfile`](Dockerfile) | Deux étages. `builder` télécharge le jeu par SteamCMD et compile `mcrcon` ; `runtime` installe Wine, construit le préfixe et récupère les deux. |
+| [`compose.yaml`](compose.yaml) | Service, ports, montages, `stop_grace_period`. |
+| [`docker/entrypoint.sh`](docker/entrypoint.sh) | Cycle de vie : droits, préfixe Wine, Xvfb, lancement, arrêt ordonné. |
+| [`tests/verify.sh`](tests/verify.sh) | Harnais de vérification, 28 assertions. |
+| [`.env.example`](.env.example) | Modèle commenté de toute la configuration. Le `.env` réel en dérive. |
+| `vrising-persistent-data/` | Sauvegardes et réglages. **C'est la seule chose irremplaçable.** |
+| `vrising-wine-prefix/` | Préfixe Wine (~1,4 Go), reconstruit tout seul si supprimé. |
+
+## Deux particularités à connaître avant de toucher au code
+
+**Les variables `VR_*` ne sont lues par aucun script.** C'est
+`VRisingServer.exe` qui lit son environnement et surcharge ses réglages, une
+fonctionnalité native du jeu. Un `grep VR_ docker/entrypoint.sh` vide ne veut
+donc pas dire que la variable est morte. Pour savoir ce qu'un réglage vaut
+réellement :
+
+```bash
+docker compose logs | grep "overridden by Process Environment Variable"
+```
+
+**L'arrêt passe par RCON, pas par un signal.** Le serveur tourne sous Wine, où
+un signal Unix ne se traduit pas en arrêt applicatif. L'entrypoint active RCON
+en interne (`127.0.0.1:25575`, jamais publié) et lui envoie `shutdown`, ce qui
+fait sortir le serveur de lui-même après sauvegarde. Un `trap` est indispensable
+pour cela : un PID 1 ne reçoit du noyau que les signaux dont il a explicitement
+installé un gestionnaire. Sans lui, `docker compose stop` attendait les 330 s de
+`stop_grace_period` puis tuait le serveur sans sauvegarde.
+
+## Exploitation
+
+```bash
+docker compose up -d --build     # construire et démarrer
+docker compose logs -f           # suivre
+docker compose stop              # arrêt ordonné, ~3 min 30
+./tests/verify.sh                # tout vérifier (destructif : arrête le serveur)
+./tests/verify.sh arret          # une seule section
+```
+
+Le serveur est prêt quand les logs affichent `Server Setup Complete`.
+
+Ports **27015** (jeu) et **27016** (query), en UDP, seuls exposés — RCON ne
+l'est pas. Le référencement passe par EOS, pas par le master server Steam
+(`VR_LIST_ON_STEAM=false`).
+
+## Documentation
+
+| Document | Contenu |
+|---|---|
+| [Rejouer une sauvegarde en solo](docs/restaurer-une-sauvegarde-en-local.md) | Récupérer le monde du serveur et l'ouvrir en partie solo. |
+| [Spécification](docs/superpowers/specs/2026-08-21-vrising-server-stack-design.md) | Conception, contraintes, décisions et leurs justifications. |
+| [Plan d'implémentation](docs/superpowers/plans/2026-08-21-vrising-server-stack.md) | Découpage en tâches, avec le détail de chacune. |
+| [Journal d'exécution](.superpowers/sdd/2026-08-21-vrising-server-stack/) | Briefs, rapports et mesures tâche par tâche. |
+
+Les commentaires du code citent des mesures plutôt que des intentions : chacun
+nomme le symptôme observé et le chiffre relevé. Ils valent la lecture avant
+toute modification.
+
+## État du plan
+
+Le plan compte 8 tâches. Les tâches 1 à 5 ont été exécutées, la 7 l'a été le
+2026-08-25. **Les tâches 6 et 8 ne l'ont pas été.**
+
+La tâche 6 est celle qui manque le plus : `VRISING_ADMINS` et `VRISING_BANS`
+sont déclarées dans `.env` et transmises par `compose.yaml`, mais **aucun code
+ne les lit**. Y inscrire un compte n'a aujourd'hui aucun effet, et rien ne le
+signale — le même défaut que celui corrigé en tâche 7, où un commentaire
+décrivait un `trap` qui n'existait pas.
+
+La tâche 8 couvrait la vérification de bout en bout et la documentation de
+déploiement ; la présente page en tient partiellement lieu.
