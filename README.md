@@ -13,7 +13,7 @@ En production sur un VPS IONOS (`root@217.160.98.201`), fichiers dans `/root`.
 ## Structure
 
 | Chemin | Rôle |
-|---|---|
+| --- | --- |
 | [`Dockerfile`](Dockerfile) | Deux étages. `builder` télécharge le jeu par SteamCMD et compile `mcrcon` ; `runtime` installe Wine, construit le préfixe et récupère les deux. |
 | [`compose.yaml`](compose.yaml) | Service, ports, montages, `stop_grace_period`. |
 | [`docker/entrypoint.sh`](docker/entrypoint.sh) | Cycle de vie : droits, préfixe Wine, Xvfb, lancement, arrêt ordonné. |
@@ -61,7 +61,7 @@ l'est pas. Le référencement passe par EOS, pas par le master server Steam
 ## Documentation
 
 | Document | Contenu |
-|---|---|
+| --- | --- |
 | [Rejouer une sauvegarde en solo](docs/restaurer-une-sauvegarde-en-local.md) | Récupérer le monde du serveur et l'ouvrir en partie solo. |
 | [Spécification](docs/superpowers/specs/2026-08-21-vrising-server-stack-design.md) | Conception, contraintes, décisions et leurs justifications. |
 | [Plan d'implémentation](docs/superpowers/plans/2026-08-21-vrising-server-stack.md) | Découpage en tâches, avec le détail de chacune. |
