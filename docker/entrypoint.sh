@@ -109,6 +109,22 @@ install -d -o "$PUID" -g "$PGID" -m 0755 /opt/vrising/logs
 tail -F "$SRV_LOG" 2>/dev/null &
 TAIL_PID=$!
 
+# --- Arret propre : reglages RCON -------------------------------------------
+# RCON est force ici et jamais publie dans compose.yaml : le protocole est en
+# clair. Il ne sert qu'a un client local, l'entrypoint lui-meme.
+# Ces exports doivent PRECEDER le lancement : le serveur ne lit les VR_* qu'a
+# son demarrage, les poser apres n'aurait aucun effet.
+# Le nom VR_RCON_BIND_ADDRESS est celui valide en Tache 1, ou les logs ont
+# montre 'BindAddress' surchargee par cette variable.
+export VR_RCON_ENABLED=true
+export VR_RCON_BIND_ADDRESS=127.0.0.1
+export VR_RCON_PORT="${VR_RCON_PORT:-25575}"
+if [ -z "${RCON_PASSWORD:-}" ]; then
+  log "ERREUR: RCON_PASSWORD est obligatoire (arret propre)"
+  exit 1
+fi
+export VR_RCON_PASSWORD="$RCON_PASSWORD"
+
 log "lancement du serveur V Rising"
 setpriv --reuid "$PUID" --regid "$PGID" --clear-groups \
   env HOME=/opt/vrising \
@@ -123,6 +139,44 @@ setpriv --reuid "$PUID" --regid "$PGID" --clear-groups \
       -logFile "$SRV_LOG" &
 SRV_PID=$!
 log "serveur lance (pid ${SRV_PID})"
+
+# Sans ce trap, le SIGTERM de `docker compose stop` n'est meme pas DELIVRE : le
+# noyau ne remet a PID 1 que les signaux dont un gestionnaire est installe, si
+# bien que bash l'ignore, Docker attend tout le stop_grace_period puis envoie
+# SIGKILL. Mesure du defaut le 2026-08-25 : 5m30 d'attente, puis Exited (137),
+# monde non sauvegarde. Installer le gestionnaire suffit a rendre le signal
+# delivrable.
+shutdown_handler() {
+  log "signal d'arret recu, arret ordonne"
+  # RCON plutot que SIGTERM : le serveur tourne sous Wine, ou un signal Unix ne
+  # se traduit pas en arret applicatif. La Tache 1 a mesure que la commande
+  # `shutdown` fait sortir le processus de lui-meme, apres sauvegarde.
+  if mcrcon -H 127.0.0.1 -P "$VR_RCON_PORT" -p "$VR_RCON_PASSWORD" \
+       -c "announce Arret du serveur en cours" \
+       -c "shutdown 1 Arret du serveur" >/dev/null 2>&1; then
+    log "commande shutdown transmise par RCON"
+  else
+    # Repli : mieux vaut un SIGTERM qui echoue qu'aucune tentative d'arret.
+    log "RCON injoignable, envoi de SIGTERM au serveur"
+    kill -TERM "$SRV_PID" 2>/dev/null || true
+  fi
+
+  local waited=0
+  while kill -0 "$SRV_PID" 2>/dev/null && [ "$waited" -lt "$GRACE" ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  if kill -0 "$SRV_PID" 2>/dev/null; then
+    log "delai de ${GRACE}s depasse, SIGKILL"
+    kill -KILL "$SRV_PID" 2>/dev/null || true
+  else
+    log "serveur arrete proprement en ${waited}s"
+  fi
+  kill "$XVFB_PID" 2>/dev/null || true
+  exit 0
+}
+trap shutdown_handler TERM INT
 
 # `wait` est interrompu par les signaux : on boucle jusqu'a la sortie reelle.
 while kill -0 "$SRV_PID" 2>/dev/null; do

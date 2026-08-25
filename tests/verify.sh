@@ -192,6 +192,28 @@ check_out "demarrage: processus serveur sous PUID (non root)" "uid=$PUID_ATTENDU
     'pid=$(pgrep -f VRisingServer.exe | head -1); [ -n "$pid" ] && sed -n "s/^Uid:[[:space:]]*\([0-9]*\).*/uid=\1/p" /proc/$pid/status'
 
 echo
+echo "== Arret propre =="
+# Ce check est DESTRUCTIF (il arrete le serveur) : il doit rester le dernier.
+#
+# Le defaut qu'il couvre, mesure le 2026-08-25 sur le serveur de production :
+# `docker compose stop` a pris 5m30 exactement — la totalite du
+# stop_grace_period — puis rendu `Exited (137)`, soit 128+9 = SIGKILL.
+# Cause : un PID 1 ne recoit du noyau que les signaux dont il a explicitement
+# installe un gestionnaire. Sans `trap`, bash n'a jamais vu passer le SIGTERM,
+# le serveur n'a pas ete prevenu et le monde n'a jamais ete sauvegarde.
+# Un ExitCode 0 est donc la seule preuve que le gestionnaire a bien tourne.
+#
+# On releve l'id AVANT l'arret : `docker compose ps -q` ne rend plus rien une
+# fois le conteneur sorti, et l'inspection porterait alors sur une chaine vide.
+check "arret: docker compose stop rend exit 0" \
+  sh -c '
+    cid=$(docker compose ps -q vrising)
+    test -n "$cid" || exit 1
+    docker compose stop >/dev/null 2>&1
+    test "$(docker inspect -f "{{.State.ExitCode}}" "$cid")" = "0"
+  '
+
+echo
 printf 'PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
 
 # Un filtre mal orthographie ne doit pas passer pour un succes.
