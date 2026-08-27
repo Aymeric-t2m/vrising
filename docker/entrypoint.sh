@@ -15,6 +15,34 @@ PREFIX=/opt/vrising/.wine-run        # copie de travail, volume nomme
 
 log() { printf '%s [entrypoint] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
+# --- Masquage des secrets ---------------------------------------------------
+# Le serveur journalise ses mots de passe en clair : cinq lignes par demarrage
+# (mesure du 2026-08-27), dont le dump de sa configuration effective et la
+# ligne « [rcon] Started listening ... Password is: ». On ne peut pas l'en
+# empecher : ces valeurs SONT sa configuration. On expurge donc a la sortie.
+# Point d'etranglement unique : les secrets ont deux chemins vers stdout, le
+# relais du journal Unity et la sortie directe du serveur et de Wine.
+# Le filtre porte sur la VALEUR des secrets et non sur le format des lignes :
+# une mise a jour du jeu qui reformaterait ces messages laisserait fuir un
+# filtre ancre sur leur texte.
+if [ -n "${VR_PASSWORD:-}${RCON_PASSWORD:-}" ]; then
+  exec > >(perl -pe '
+      BEGIN {
+        $| = 1;   # ligne par ligne, sinon docker logs est muet 4 Ko durant
+        @s = grep { length } ($ENV{VR_PASSWORD} // "", $ENV{RCON_PASSWORD} // "");
+      }
+      # `for my $s (@s)` et NON `s/.../.../g for @s` : cette derniere forme
+      # alias $_ sur chaque secret, si bien que la substitution s applique au
+      # mot de passe et jamais a la ligne. MESURE le 2026-08-27 : filtre
+      # installe, message « masquage actif » affiche, et les cinq lignes
+      # fuient quand meme. Panne silencieuse, dans la direction dangereuse.
+      for my $s (@s) { s/\Q$s\E/***MASQUE***/g }
+    ') 2>&1
+  log "masquage des secrets actif dans les journaux"
+else
+  log "aucun secret a masquer (VR_PASSWORD et RCON_PASSWORD vides)"
+fi
+
 # Parseur commun des listes de SteamID64 (adminlist/banlist) : voir
 # docker/steamids.sh pour le defaut qu'il corrige et pourquoi il vit dans un
 # fichier a part.

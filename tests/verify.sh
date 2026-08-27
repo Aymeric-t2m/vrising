@@ -276,6 +276,23 @@ check "declaratif: banlist survit a un redemarrage" \
   '
 
 echo
+echo "== Secrets =="
+check_absent "secrets: mot de passe du serveur absent des journaux" \
+  sh -c '
+    V=$(. ./.env; printf "%s" "$VR_PASSWORD")
+    test -n "$V" || exit 2          # sonde inexploitable, jamais un faux PASS
+    docker compose logs 2>&1 | grep -qF "$V"
+  '
+check_absent "secrets: mot de passe RCON absent des journaux" \
+  sh -c '
+    V=$(. ./.env; printf "%s" "$RCON_PASSWORD")
+    test -n "$V" || exit 2
+    docker compose logs 2>&1 | grep -qF "$V"
+  '
+check_out "secrets: le masque apparait bien dans les journaux" "***MASQUE***" \
+  sh -c 'docker compose logs 2>&1'
+
+echo
 echo "== Arret propre =="
 # Ce check est DESTRUCTIF (il arrete le serveur) : il doit rester le dernier.
 #
