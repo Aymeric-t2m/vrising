@@ -63,6 +63,7 @@ l'est pas. Le référencement passe par EOS, pas par le master server Steam
 | Document | Contenu |
 | --- | --- |
 | [Rejouer une sauvegarde en solo](docs/restaurer-une-sauvegarde-en-local.md) | Récupérer le monde du serveur et l'ouvrir en partie solo. |
+| [Déploiement](docs/deploiement.md) | Installation sur une machine neuve, pare-feu, administration, limites connues. |
 | [Spécification](docs/superpowers/specs/2026-08-21-vrising-server-stack-design.md) | Conception, contraintes, décisions et leurs justifications. |
 | [Plan d'implémentation](docs/superpowers/plans/2026-08-21-vrising-server-stack.md) | Découpage en tâches, avec le détail de chacune. |
 | [Journal d'exécution](.superpowers/sdd/2026-08-21-vrising-server-stack/) | Briefs, rapports et mesures tâche par tâche. |
@@ -73,14 +74,8 @@ toute modification.
 
 ## État du plan
 
-Le plan compte 8 tâches. Les tâches 1 à 5 ont été exécutées, la 7 l'a été le
-2026-08-25. **Les tâches 6 et 8 ne l'ont pas été.**
-
-La tâche 6 est celle qui manque le plus : `VRISING_ADMINS` et `VRISING_BANS`
-sont déclarées dans `.env` et transmises par `compose.yaml`, mais **aucun code
-ne les lit**. Y inscrire un compte n'a aujourd'hui aucun effet, et rien ne le
-signale — le même défaut que celui corrigé en tâche 7, où un commentaire
-décrivait un `trap` qui n'existait pas.
-
-La tâche 8 couvrait la vérification de bout en bout et la documentation de
-déploiement ; la présente page en tient partiellement lieu.
+Le plan compte 9 tâches, toutes exécutées. La 9 est le masquage des secrets
+dans les journaux du conteneur (voir « Limites connues » dans
+[la documentation de déploiement](docs/deploiement.md)). Le détail
+tâche par tâche est dans le
+[journal d'exécution](.superpowers/sdd/2026-08-21-vrising-server-stack/).

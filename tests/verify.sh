@@ -38,6 +38,16 @@ check() {
 check_out() {
   local name="$1" expect="$2"; shift 2
   skip "$name" && return 0
+  # D2 (2026-08-28) : plusieurs appelants derivent "$expect" du .env
+  # (SERVER_NAME_ATTENDU, ADMIN_ATTENDU). Si cette extraction rend une chaine
+  # vide, `grep -qF -- ""` matche n'importe quelle sortie -- faux PASS
+  # silencieux, sur une sonde qui ne prouve plus rien. Meme motif que le
+  # troisieme cas de check_absent ci-dessous : FAIL, "sonde inexploitable".
+  if [ -z "$expect" ]; then
+    printf '  FAIL  %s (sonde inexploitable, chaine attendue vide)\n' "$name"
+    FAIL=$((FAIL+1))
+    return 0
+  fi
   local out
   out="$("$@" 2>&1)"
   if grep -qF -- "$expect" <<<"$out"; then
@@ -293,6 +303,28 @@ check_out "secrets: le masque apparait bien dans les journaux" "***MASQUE***" \
   sh -c 'docker compose logs 2>&1'
 
 echo
+echo "== Proprete du depot =="
+# D1 (2026-08-28) : le plan exigeait .env et vrising-persistent-data/ non
+# verses. L'humain a choisi de les verser deliberement ("since it's a test
+# private repo", commit d3786c6) -- son choix explicite prime sur le plan.
+# skip() plutot que suppression : le code de l'assertion reste dans ce
+# fichier, lisible par qui reprendrait ce depot hors de ce contexte de test.
+# Le prefixe FILTER="..." ne force le skip QUE pour cet appel de check() : une
+# affectation de variable devant un nom de fonction bash n'est active que
+# pour la duree de cet appel (mesure ci-dessous), le FILTER global -- donc les
+# checks suivants, y compris le troisieme de cette section -- n'en est pas
+# affecte.
+#   $ bash -c 'FILTER=x f() { echo $FILTER; }; FILTER=y f; echo $FILTER'
+#   y
+#   x
+FILTER="perime-D1-2026-08-28" check "depot: le .env n'est pas versionne" \
+  sh -c '! git ls-files --error-unmatch .env 2>/dev/null'
+FILTER="perime-D1-2026-08-28" check "depot: le volume de donnees n'est pas versionne" \
+  sh -c 'test -z "$(git ls-files vrising-persistent-data)"'
+check "depot: aucun fichier root:root versionne" \
+  sh -c 'test -z "$(git ls-files | xargs -r stat -c "%U" | grep -x root)"'
+
+echo
 echo "== Arret propre =="
 # Ce check est DESTRUCTIF (il arrete le serveur) : il doit rester le dernier.
 #
@@ -313,6 +345,16 @@ check "arret: docker compose stop rend exit 0" \
     docker compose stop >/dev/null 2>&1
     test "$(docker inspect -f "{{.State.ExitCode}}" "$cid")" = "0"
   '
+# D6 (2026-08-28) : le check precedent ne prouve que l'ExitCode 0, pas que
+# l'arret est passe par RCON -- un conteneur peut sortir en 0 sans que
+# shutdown_handler ait jamais tourne. Sa branche RCON journalise
+# "serveur arrete proprement en ${waited}s" (docker/entrypoint.sh) ; sa
+# branche de repli SIGKILL journalise "delai de ${GRACE}s depasse, SIGKILL" a
+# la place -- un texte different, donc ce check echouerait bien si l'arret
+# tombait dans ce repli. Le conteneur est deja arrete (check precedent) :
+# `docker compose logs` reste consultable sur un conteneur sorti.
+check_out "arret: arret ordonne effectivement journalise" "serveur arrete proprement" \
+  sh -c 'docker compose logs 2>&1'
 
 echo
 printf 'PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
