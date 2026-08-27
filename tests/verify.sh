@@ -23,12 +23,24 @@ check() {
 }
 
 # Assertion sur la sortie: check_out <nom> <sous-chaine attendue> <commande...>
+# ATTENTION au pipe vers grep : NE PAS ecrire `printf ... | grep -qF ...`.
+# Mesure sur ce projet (Tache 6, logs cumules sur plusieurs jours de
+# redemarrages, 400-800 Ko) : `grep -q` sort DES QU IL TROUVE une
+# correspondance, sans lire le reste de son entree. Si la sortie captee
+# depasse le tampon de pipe Linux (64 Ko) et que la correspondance se trouve
+# avant la fin, `printf` encore en train d ecrire recoit SIGPIPE et sort en
+# 141. Sous `set -o pipefail` (tete de ce fichier), le code de sortie du
+# pipeline devient celui de `printf` (141, non nul) au lieu de celui de
+# `grep` (0) : le check echoue A TORT alors que la chaine est bien presente.
+# Touchait ici "demarrage: serveur pret" et consorts des que les logs
+# grossissaient. La here-string evite le pipe : pas de second processus,
+# pas de SIGPIPE possible.
 check_out() {
   local name="$1" expect="$2"; shift 2
   skip "$name" && return 0
   local out
   out="$("$@" 2>&1)"
-  if printf '%s' "$out" | grep -qF -- "$expect"; then
+  if grep -qF -- "$expect" <<<"$out"; then
     printf '  PASS  %s\n' "$name"; PASS=$((PASS+1))
   else
     printf '  FAIL  %s (attendu: %s)\n' "$name" "$expect"; FAIL=$((FAIL+1))
@@ -42,6 +54,8 @@ check_out() {
 #   1        elle est absente           => PASS
 #   125/127  la sonde n'a pas tourne    => FAIL, jamais un faux PASS
 # Une negation `! cmd` confondrait les deux derniers cas.
+# Verifie non affectee par le bug SIGPIPE/pipefail de check_out ci-dessus :
+# pas de pipe vers grep ici, la capture est un `$(...)` direct sur "$@".
 check_absent() {
   local name="$1"; shift
   skip "$name" && return 0
@@ -98,7 +112,15 @@ check_out "runtime: prefixe Wine possede par vrising" "1000" \
 
 echo
 echo "== Configuration =="
-check_out "config: nom sans guillemets parasites" "VR_SERVER_NAME: Serveur de test" \
+# Valeur attendue derivee du .env plutot que codee en dur ("Serveur de test"
+# a l'origine) : l'humain a personnalise VR_SERVER_NAME='V Rising BIZU'.
+# Sourcer le .env retire deja les guillemets simples encadrants (syntaxe
+# bash) : c'est donc la valeur EFFECTIVE attendue, sans guillemets parasites.
+# L'intention du check est preservee -- si de tels guillemets fuitaient dans
+# le nom effectif, il ne correspondrait plus a cette valeur et le check
+# echouerait toujours.
+SERVER_NAME_ATTENDU=$(. ./.env 2>/dev/null; echo "$VR_SERVER_NAME")
+check_out "config: nom sans guillemets parasites" "VR_SERVER_NAME: $SERVER_NAME_ATTENDU" \
   docker compose config
 # ATTENTION sur le nommage : ces deux assertions testent les ports PUBLIES,
 # que l'ancien compose defectueux publiait deja correctement (27015 et 27016).
@@ -136,7 +158,7 @@ echo
 echo "== Demarrage =="
 check_out "demarrage: serveur pret" "Server Setup Complete" \
   sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
-check_out "demarrage: nom effectif sans guillemets" '"Name": "Serveur de test"' \
+check_out "demarrage: nom effectif sans guillemets" "\"Name\": \"$SERVER_NAME_ATTENDU\"" \
   sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
 check_out "demarrage: port de jeu effectif" '"Port": 27015' \
   sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
@@ -195,23 +217,10 @@ echo
 echo "== Configuration declarative =="
 check_out "declaratif: adminlist contient le SteamID" "76561198000000000" \
   cat vrising-persistent-data/Settings/adminlist.txt
-# Mesure : le dump "Loaded ServerGameSettings" EST present dans les logs
-# (contrairement a l hypothese du plan). Mais grep contre docker compose logs
-# est retire ici, car il declenche un bug preexistant du harnais et non un
-# defaut de cette tache : check_out fait `printf ... | grep -qF ...` sous
-# `set -o pipefail` (tete du fichier). Sur cet environnement de test, les
-# logs cumulent plusieurs redemarrages (des jours de fonctionnement) et
-# depassent largement les 64 Ko du tampon de pipe. `grep -q` sort des qu il
-# trouve la correspondance SANS consommer le reste de son entree ; `printf`,
-# encore en train d ecrire, recoit alors SIGPIPE (exit 141). Sous pipefail,
-# le code de sortie du pipeline redevient celui de `printf` (141) au lieu de
-# celui de `grep` (0), et le check echoue a tort meme quand la chaine est
-# bien presente. On preuve donc l application des regles autrement : via le
-# fichier reellement pose par l entrypoint, hors de portee de ce bug.
 check_out "declaratif: regles de jeu appliquees" '"MaterialYieldModifier_Global": 1.5' \
-  cat vrising-persistent-data/Settings/ServerGameSettings.json
+  sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
 check_out "declaratif: taille de clan appliquee" '"ClanSize": 4' \
-  cat vrising-persistent-data/Settings/ServerGameSettings.json
+  sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
 check "declaratif: banlist survit a un redemarrage" \
   sh -c '
     # Pas de sudo : depuis la Tache 5 le fichier appartient a PUID.
