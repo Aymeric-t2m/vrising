@@ -143,5 +143,6 @@ RUN setpriv --reuid ${RUNTIME_UID} --regid ${RUNTIME_GID} --clear-groups \
 VOLUME ["/opt/vrising/save-data"]
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY docker/steamids.sh /usr/local/bin/steamids.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/steamids.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

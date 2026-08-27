@@ -215,12 +215,51 @@ check_out "demarrage: processus serveur sous PUID (non root)" "uid=$PUID_ATTENDU
 
 echo
 echo "== Configuration declarative =="
-check_out "declaratif: adminlist contient le SteamID" "76561198000000000" \
+# Valeur attendue derivee du .env (premier identifiant de VRISING_ADMINS)
+# plutot que codee en dur : l'humain a remplace la valeur de test posee au
+# Step 2 par son vrai SteamID64 pendant le Round 1. Coder la valeur en dur
+# aurait echoue des le prochain redemarrage du conteneur, sans lien avec un
+# vrai defaut de cette tache.
+ADMIN_ATTENDU=$(. ./.env 2>/dev/null; printf '%s' "$VRISING_ADMINS" | cut -d',' -f1 | tr -d ' \t')
+check_out "declaratif: adminlist contient le SteamID" "$ADMIN_ATTENDU" \
   cat vrising-persistent-data/Settings/adminlist.txt
 check_out "declaratif: regles de jeu appliquees" '"MaterialYieldModifier_Global": 1.5' \
   sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
 check_out "declaratif: taille de clan appliquee" '"ClanSize": 4' \
   sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
+# Trois checks du parseur commun docker/steamids.sh, sur l'hote, sans
+# conteneur : ils tournent en millisecondes, contrairement a un aller-retour
+# reconstruction d'image + redemarrage (plusieurs minutes).
+# Regression du defaut F5 : tr -d '[:space:]' supprimait aussi les retours a
+# la ligne inseres par tr ',' '\n', concatenant tous les identifiants des le
+# deuxieme. Doit produire deux lignes distinctes.
+check "declaratif: steamids virgule produit deux lignes" \
+  bash -c '
+    source docker/steamids.sh
+    tmp=$(mktemp)
+    ecrire_steamids "76561198000000000,76561198000000001" "$tmp"
+    n=$(wc -l < "$tmp")
+    rm -f "$tmp"
+    test "$n" -eq 2
+  '
+check "declaratif: steamids identifiant malformise rejete" \
+  bash -c '
+    source docker/steamids.sh
+    tmp=$(mktemp)
+    ecrire_steamids "76561198000000000,trop-court,76561198abcde0000" "$tmp"
+    n=$(wc -l < "$tmp")
+    rm -f "$tmp"
+    test "$n" -eq 1
+  '
+check "declaratif: steamids espaces autour virgule toleres" \
+  bash -c '
+    source docker/steamids.sh
+    tmp=$(mktemp)
+    ecrire_steamids "76561198000000000 , 76561198000000001" "$tmp"
+    n=$(wc -l < "$tmp")
+    rm -f "$tmp"
+    test "$n" -eq 2
+  '
 check "declaratif: banlist survit a un redemarrage" \
   sh -c '
     # Pas de sudo : depuis la Tache 5 le fichier appartient a PUID.

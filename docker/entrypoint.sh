@@ -15,6 +15,11 @@ PREFIX=/opt/vrising/.wine-run        # copie de travail, volume nomme
 
 log() { printf '%s [entrypoint] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
+# Parseur commun des listes de SteamID64 (adminlist/banlist) : voir
+# docker/steamids.sh pour le defaut qu'il corrige et pourquoi il vit dans un
+# fichier a part.
+source /usr/local/bin/steamids.sh
+
 # --- Droits -----------------------------------------------------------------
 # Le repertoire du jeu reste root:root et n'est jamais chowne : 2 Go lus
 # seulement. Seuls le volume de donnees et le prefixe Wine doivent appartenir
@@ -57,14 +62,7 @@ fi
 # --- Configuration declarative ----------------------------------------------
 # adminlist : declaratif. Reecrit a chaque demarrage depuis le .env, car les
 # administrateurs relevent de la configuration d'infrastructure.
-: > "$DATA/Settings/adminlist.txt"
-if [ -n "${VRISING_ADMINS:-}" ]; then
-  printf '%s' "$VRISING_ADMINS" \
-    | tr ',' '\n' \
-    | tr -d '[:space:]' \
-    | grep -E '^[0-9]{17}$' \
-    >> "$DATA/Settings/adminlist.txt" || true
-fi
+ecrire_steamids "${VRISING_ADMINS:-}" "$DATA/Settings/adminlist.txt"
 chown "$PUID:$PGID" "$DATA/Settings/adminlist.txt"
 log "adminlist: $(wc -l < "$DATA/Settings/adminlist.txt") entree(s)"
 
@@ -72,14 +70,7 @@ log "adminlist: $(wc -l < "$DATA/Settings/adminlist.txt") entree(s)"
 # Le .env ne fait que l'amorcer si le fichier est absent. L'ecraser detruirait
 # les bans operationnels.
 if [ ! -f "$DATA/Settings/banlist.txt" ]; then
-  : > "$DATA/Settings/banlist.txt"
-  if [ -n "${VRISING_BANS:-}" ]; then
-    printf '%s' "$VRISING_BANS" \
-      | tr ',' '\n' \
-      | tr -d '[:space:]' \
-      | grep -E '^[0-9]{17}$' \
-      >> "$DATA/Settings/banlist.txt" || true
-  fi
+  ecrire_steamids "${VRISING_BANS:-}" "$DATA/Settings/banlist.txt"
   chown "$PUID:$PGID" "$DATA/Settings/banlist.txt"
   log "banlist amorcee: $(wc -l < "$DATA/Settings/banlist.txt") entree(s)"
 else
