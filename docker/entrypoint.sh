@@ -54,6 +54,48 @@ if [ "$(stat -c %u "$PREFIX")" != "$PUID" ]; then
   log "reattribution terminee"
 fi
 
+# --- Configuration declarative ----------------------------------------------
+# adminlist : declaratif. Reecrit a chaque demarrage depuis le .env, car les
+# administrateurs relevent de la configuration d'infrastructure.
+: > "$DATA/Settings/adminlist.txt"
+if [ -n "${VRISING_ADMINS:-}" ]; then
+  printf '%s' "$VRISING_ADMINS" \
+    | tr ',' '\n' \
+    | tr -d '[:space:]' \
+    | grep -E '^[0-9]{17}$' \
+    >> "$DATA/Settings/adminlist.txt" || true
+fi
+chown "$PUID:$PGID" "$DATA/Settings/adminlist.txt"
+log "adminlist: $(wc -l < "$DATA/Settings/adminlist.txt") entree(s)"
+
+# banlist : propriete du serveur, qui l'ecrit lors d'un bannissement en jeu.
+# Le .env ne fait que l'amorcer si le fichier est absent. L'ecraser detruirait
+# les bans operationnels.
+if [ ! -f "$DATA/Settings/banlist.txt" ]; then
+  : > "$DATA/Settings/banlist.txt"
+  if [ -n "${VRISING_BANS:-}" ]; then
+    printf '%s' "$VRISING_BANS" \
+      | tr ',' '\n' \
+      | tr -d '[:space:]' \
+      | grep -E '^[0-9]{17}$' \
+      >> "$DATA/Settings/banlist.txt" || true
+  fi
+  chown "$PUID:$PGID" "$DATA/Settings/banlist.txt"
+  log "banlist amorcee: $(wc -l < "$DATA/Settings/banlist.txt") entree(s)"
+else
+  log "banlist existante conservee ($(wc -l < "$DATA/Settings/banlist.txt") entree(s))"
+fi
+
+# Regles de jeu : declaratives. Le fichier versionne est seul maitre et ecrase
+# la cible a chaque demarrage. Le serveur n'ecrit jamais dans ce fichier.
+if [ -f /config/ServerGameSettings.json ]; then
+  cp /config/ServerGameSettings.json "$DATA/Settings/ServerGameSettings.json"
+  chown "$PUID:$PGID" "$DATA/Settings/ServerGameSettings.json"
+  log "regles de jeu appliquees depuis /config/ServerGameSettings.json"
+else
+  log "aucun /config/ServerGameSettings.json : defauts du jeu conserves"
+fi
+
 # --- Serveur ----------------------------------------------------------------
 # Xvfb laisse /tmp/.X1-lock derriere lui. Ce fichier SURVIT a un redemarrage du
 # conteneur (meme couche inscriptible) et Xvfb refuse alors de demarrer, car le

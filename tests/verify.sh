@@ -192,6 +192,42 @@ check_out "demarrage: processus serveur sous PUID (non root)" "uid=$PUID_ATTENDU
     'pid=$(pgrep -f VRisingServer.exe | head -1); [ -n "$pid" ] && sed -n "s/^Uid:[[:space:]]*\([0-9]*\).*/uid=\1/p" /proc/$pid/status'
 
 echo
+echo "== Configuration declarative =="
+check_out "declaratif: adminlist contient le SteamID" "76561198000000000" \
+  cat vrising-persistent-data/Settings/adminlist.txt
+# Mesure : le dump "Loaded ServerGameSettings" EST present dans les logs
+# (contrairement a l hypothese du plan). Mais grep contre docker compose logs
+# est retire ici, car il declenche un bug preexistant du harnais et non un
+# defaut de cette tache : check_out fait `printf ... | grep -qF ...` sous
+# `set -o pipefail` (tete du fichier). Sur cet environnement de test, les
+# logs cumulent plusieurs redemarrages (des jours de fonctionnement) et
+# depassent largement les 64 Ko du tampon de pipe. `grep -q` sort des qu il
+# trouve la correspondance SANS consommer le reste de son entree ; `printf`,
+# encore en train d ecrire, recoit alors SIGPIPE (exit 141). Sous pipefail,
+# le code de sortie du pipeline redevient celui de `printf` (141) au lieu de
+# celui de `grep` (0), et le check echoue a tort meme quand la chaine est
+# bien presente. On preuve donc l application des regles autrement : via le
+# fichier reellement pose par l entrypoint, hors de portee de ce bug.
+check_out "declaratif: regles de jeu appliquees" '"MaterialYieldModifier_Global": 1.5' \
+  cat vrising-persistent-data/Settings/ServerGameSettings.json
+check_out "declaratif: taille de clan appliquee" '"ClanSize": 4' \
+  cat vrising-persistent-data/Settings/ServerGameSettings.json
+check "declaratif: banlist survit a un redemarrage" \
+  sh -c '
+    # Pas de sudo : depuis la Tache 5 le fichier appartient a PUID.
+    echo 76561198999999999 >> vrising-persistent-data/Settings/banlist.txt
+    docker compose restart >/dev/null 2>&1
+    sleep 20
+    grep -q 76561198999999999 vrising-persistent-data/Settings/banlist.txt
+    rc=$?
+    # Nettoyage APRES la preuve : vrising-persistent-data/ est versionne dans
+    # ce depot, le harnais doit rester relancable sans accumuler un ban bidon
+    # dans un fichier suivi par git. Le code de sortie reste celui du grep.
+    sed -i "/^76561198999999999$/d" vrising-persistent-data/Settings/banlist.txt
+    exit "$rc"
+  '
+
+echo
 echo "== Arret propre =="
 # Ce check est DESTRUCTIF (il arrete le serveur) : il doit rester le dernier.
 #
