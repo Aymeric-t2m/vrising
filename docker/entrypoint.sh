@@ -47,6 +47,8 @@ fi
 # docker/steamids.sh pour le defaut qu'il corrige et pourquoi il vit dans un
 # fichier a part.
 source /usr/local/bin/steamids.sh
+# Attente bornee de la sortie du serveur, utilisee par shutdown_handler.
+source /usr/local/bin/attente_arret.sh
 
 # --- Droits -----------------------------------------------------------------
 # Le repertoire du jeu reste root:root et n'est jamais chowne : 2 Go lus
@@ -74,14 +76,24 @@ if [ ! -f "$PREFIX/system.reg" ]; then
   cp -a "$PREFIX_TEMPLATE/." "$PREFIX/"
   log "copie terminee"
 fi
+# La racine du prefixe, elle, doit toujours appartenir a PUID : `mkdir -p`
+# ci-dessus la cree sous root, et Wine ecrit system.reg et user.reg dedans au
+# fil de l'eau.
 chown "$PUID:$PGID" "$PREFIX" 2>/dev/null || true
 
-# Ce chown est COUTEUX : sur overlayfs il force un copy-up de ~1,4 Go, soit
-# plusieurs minutes. Il ne se declenche que si PUID differe de l'uid de
-# construction de l'image (1000 par defaut). Voir la note du .env.example.
-if [ "$(stat -c %u "$PREFIX")" != "$PUID" ]; then
+# La sonde porte sur system.reg et NON sur "$PREFIX" : le chown ci-dessus vient
+# de rendre la racine conforme, si bien qu'une comparaison sur elle serait
+# TOUJOURS fausse et le `chown -R` qu'elle protege, du code mort (C1 de la revue
+# finale de branche, 2026-08-28 -- panne silencieuse : pour PUID != 1000 le
+# contenu du prefixe restait a l'uid du gabarit, donc non inscriptible, et
+# l'avertissement prevu pour ce cas ne s'affichait jamais). `cp -a` preserve
+# l'uid du gabarit sur le CONTENU : c'est lui qu'il faut interroger.
+# system.reg est present dans les deux chemins, premiere copie comme demarrage
+# suivant : c'est deja la sentinelle du bloc ci-dessus.
+if [ "$(stat -c %u "$PREFIX/system.reg")" != "$PUID" ]; then
   log "ATTENTION: reattribution du prefixe Wine a ${PUID}:${PGID}"
-  log "  copy-up overlayfs de ~1,4 Go, comptez plusieurs minutes."
+  log "  chown -R sur ~1,4 Go : quasi instantane sur le bind mount de"
+  log "  compose.yaml, plusieurs minutes sur un volume Docker (copy-up)."
   log "  pour l'eviter: reconstruire avec --build-arg RUNTIME_UID=${PUID}"
   chown -R "$PUID:$PGID" "$PREFIX"
   log "reattribution terminee"
@@ -212,30 +224,43 @@ shutdown_handler() {
   # RCON plutot que SIGTERM : le serveur tourne sous Wine, ou un signal Unix ne
   # se traduit pas en arret applicatif. La Tache 1 a mesure que la commande
   # `shutdown` fait sortir le processus de lui-meme, apres sauvegarde.
+  # La VOIE EMPRUNTEE est retenue : la seule qui sauvegarde est RCON, et la
+  # disparition du processus ne suffit pas a distinguer les deux -- un SIGTERM
+  # tue Wine tout aussi vite, sans que le monde ait ete ecrit.
+  local voie=rcon
   if mcrcon -H 127.0.0.1 -P "$VR_RCON_PORT" -p "$VR_RCON_PASSWORD" \
        -c "announce Arret du serveur en cours" \
        -c "shutdown 1 Arret du serveur" >/dev/null 2>&1; then
     log "commande shutdown transmise par RCON"
   else
     # Repli : mieux vaut un SIGTERM qui echoue qu'aucune tentative d'arret.
+    voie=sigterm
     log "RCON injoignable, envoi de SIGTERM au serveur"
     kill -TERM "$SRV_PID" 2>/dev/null || true
   fi
 
-  local waited=0
-  while kill -0 "$SRV_PID" 2>/dev/null && [ "$waited" -lt "$GRACE" ]; do
-    sleep 1
-    waited=$((waited + 1))
-  done
+  attendre_sortie "$SRV_PID" "$GRACE"
+  local waited="$ECOULE"
 
+  # Le code de sortie du conteneur est la seule trace de l'arret qui survive
+  # aux journaux : 0 est donc reserve a l'arret dont la sauvegarde est etablie.
+  # Sortir 0 dans tous les cas, comme le prescrivait le plan, rendait
+  # indiscernables un monde sauvegarde et un monde perdu.
+  local rc=0
   if kill -0 "$SRV_PID" 2>/dev/null; then
     log "delai de ${GRACE}s depasse, SIGKILL"
     kill -KILL "$SRV_PID" 2>/dev/null || true
-  else
+    rc=1
+  elif [ "$voie" = rcon ]; then
     log "serveur arrete proprement en ${waited}s"
+  else
+    log "ATTENTION: serveur arrete par SIGTERM en ${waited}s, RCON injoignable"
+    log "  la sauvegarde du monde N'EST PAS garantie : Wine ne traduit pas"
+    log "  SIGTERM en arret applicatif. Dernier autosave = dernier etat sur."
+    rc=1
   fi
   kill "$XVFB_PID" 2>/dev/null || true
-  exit 0
+  exit "$rc"
 }
 trap shutdown_handler TERM INT
 

@@ -98,13 +98,37 @@ docker compose stop
 ```
 
 L'arrêt est ordonné : les joueurs sont prévenus, le serveur sauvegarde, puis
-s'arrête. Le code de sortie doit être `0`.
+s'arrête de lui-même.
+
+Le **code de sortie discrimine**, et c'est la seule trace qui survive aux
+journaux du conteneur :
+
+| Code | Signification |
+|---|---|
+| `0` | La commande d'arrêt est passée par RCON et le serveur est sorti de lui-même : **le monde est sauvegardé**. |
+| `1` | Soit RCON était injoignable et le repli SIGTERM a tué Wine, soit le délai de grâce a expiré et le serveur a reçu SIGKILL. Dans les deux cas la **sauvegarde n'est pas garantie** : le dernier autosave est le dernier état sûr. Les journaux nomment le cas. |
+
+```bash
+docker inspect -f '{{.State.ExitCode}}' "$(docker compose ps -aq vrising)"
+```
+
+Un `1` n'est pas anodin : Wine ne traduit pas SIGTERM en arrêt applicatif, donc
+le serveur n'a eu aucune occasion d'écrire son monde.
 
 ## Vérification
 
 ```bash
+docker build --target builder -t vrising-builder:test .
 ./tests/verify.sh
 ```
+
+`docker compose build` ne pose pas de tag sur l'étage `builder` : sans la
+première commande, les deux assertions qui l'inspectent échouent faute d'image,
+et non faute de défaut. Cette image ne sert qu'au harnais.
+
+Le harnais **arrête le serveur** : ses deux dernières sections vérifient l'arrêt
+ordonné puis l'arrêt dégradé, et le laissent arrêté. Relance-le avec
+`docker compose start`.
 
 ## Limites connues
 

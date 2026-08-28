@@ -165,6 +165,55 @@ check "config: regles de jeu montees en lecture seule" \
   sh -c 'docker compose config | grep -q "read_only: true"'
 
 echo
+echo "== Droits du prefixe Wine =="
+# C1 de la revue finale de branche (2026-08-28). L'entrypoint chowne le
+# REPERTOIRE du prefixe juste avant de comparer `stat -c %u` de ce meme
+# repertoire a PUID : la garde etait donc toujours fausse et le `chown -R`
+# qu'elle protege, du CODE MORT. Consequence pour PUID != 1000 : `cp -a`
+# preserve l'uid 1000 du gabarit, seule la racine passe a PUID, tout le CONTENU
+# reste non inscriptible -- et l'avertissement prevu pour ce cas ne s'affiche
+# jamais. Panne silencieuse. Ne mord pas avec le PUID=1000 par defaut, mais
+# docs/deploiement.md demande explicitement `id -u`.
+#
+# La sonde n'utilise pas la pile compose : un prefixe jetable d'UN SEUL fichier
+# suffit, puisque la sentinelle `system.reg` presente fait sauter la copie
+# initiale. Le conteneur est tue des la fin de la section « Droits » de
+# l'entrypoint, que la ligne « adminlist: » suit immediatement : une a deux
+# secondes, et le serveur n'est jamais lance.
+check "droits: le prefixe Wine est reattribue quand PUID differe de son uid" \
+  sh -c '
+    # Deux niveaux, et ce n est pas du zele : le conteneur chowne le REPERTOIRE
+    # du prefixe, ce qui nous en retirerait l acces (mktemp -d cree en 0700) --
+    # ni lecture de l uid ensuite, ni nettoyage. Le prefixe jetable est donc un
+    # sous-repertoire en 0777, abrite des tiers par un parent en 0700.
+    base=$(mktemp -d) || exit 1
+    d="$base/prefixe"
+    mkdir -m 0777 "$d" || { rm -rf "$base"; exit 1; }
+    : >"$d/system.reg" || { rm -rf "$base"; exit 1; }
+    # Cible = uid du fichier + 1 : garantit un ecart quel que soit l uid qui
+    # execute le harnais, sans coder 1001 en dur.
+    cible=$(( $(stat -c %u "$d/system.reg") + 1 ))
+    cid=$(docker run -d -e PUID="$cible" -e PGID="$cible" \
+            -v "$d":/opt/vrising/.wine-run vrising-server:local 2>/dev/null) \
+      || { rm -rf "$base"; exit 1; }
+    i=0
+    while [ "$i" -lt 30 ]; do
+      docker logs "$cid" 2>&1 | grep -q "adminlist:" && break
+      sleep 1; i=$((i + 1))
+    done
+    docker rm -f "$cid" >/dev/null 2>&1
+    uid=$(stat -c %u "$d/system.reg")
+    # Nettoyage PAR CONTENEUR, et non `rm -rf` : Wine a le temps d amorcer le
+    # prefixe avant d etre tue et y laisse des repertoires en 0700 sous l uid
+    # cible, que l hote ne peut pas supprimer (mesure du 2026-08-28). Meme
+    # image que la sonde, donc aucune dependance nouvelle pour le harnais.
+    docker run --rm --entrypoint rm -v "$base":/nettoyage vrising-server:local \
+      -rf /nettoyage/prefixe >/dev/null 2>&1
+    rmdir "$base" 2>/dev/null
+    test "$uid" = "$cible"
+  '
+
+echo
 echo "== Demarrage =="
 check_out "demarrage: serveur pret" "Server Setup Complete" \
   sh -c 'docker compose logs 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
@@ -326,6 +375,78 @@ check "depot: aucun fichier root:root versionne" \
 
 echo
 echo "== Arret propre =="
+# Le budget de grace, prouve sur l'hote en quelques secondes plutot qu'en
+# arretant un vrai serveur : c'est la raison d'etre de docker/attente_arret.sh.
+check "arret: le budget de grace se compte en secondes, pas en tours de boucle" \
+  bash -c '
+    source docker/attente_arret.sh
+    # `sleep` remplace par une attente 100 fois plus courte : un budget compte
+    # en TOURS s epuise alors en ~0,03 s, un budget compte a l horloge tient
+    # ses 3 secondes. C est l ecart MESURE en production le 2026-08-28, dans
+    # l autre sens -- le serveur en cours de demarrage rendait chaque tour six
+    # fois plus cher qu une seconde, si bien que 300 tours ont dure 1996 s.
+    # Le conteneur depassait donc de six fois le stop_grace_period de Docker.
+    sleep() { command sleep 0.01; }
+    command sleep 60 & p=$!
+    debut=$(date +%s)
+    attendre_sortie "$p" 3
+    rc=$?
+    reel=$(( $(date +%s) - debut ))
+    kill "$p" 2>/dev/null
+    test "$rc" -eq 1 && test "$reel" -ge 2
+  '
+# Contre-partie du budget : l attente doit rendre la main des que le processus
+# sort, sans consommer le budget entier. Un arret reel dure ~220s pour un
+# budget de 300s, la difference est du temps ou le conteneur serait fige.
+check "arret: l attente rend la main des que le processus sort" \
+  bash -c '
+    source docker/attente_arret.sh
+    command sleep 1 & p=$!
+    debut=$(date +%s)
+    attendre_sortie "$p" 300
+    rc=$?
+    reel=$(( $(date +%s) - debut ))
+    test "$rc" -eq 0 && test "$reel" -lt 10
+  '
+
+# PRECONDITION de tout ce qui suit : un serveur REELLEMENT demarre. Le check de
+# banlist ci-dessus redemarre le conteneur et attend 20 s en dur, ce qui suffit
+# a SA preuve mais pas au serveur, qui met ~90 s a charger son monde. Mesure du
+# 2026-08-28 : la section arretait donc un serveur lance 24 s plus tot, ou RCON
+# ACCEPTE la commande shutdown sans que le serveur y donne suite -- le budget de
+# grace s'epuisait en entier (300 s), SIGKILL, et les deux assertions d'arret
+# propre echouaient sur un defaut qui n'existait pas. Sans cette porte, elles
+# sont une loterie sur la vitesse de demarrage.
+# Le marqueur est la FIN DU CHARGEMENT DU MONDE et non "Server Setup Complete",
+# qui arrive trop tot. Mesure du 2026-08-28, horodatages d'un meme demarrage :
+#   19:38:53  [rcon] Started listening         <- RCON accepte deja des commandes
+#   19:38:54  commande shutdown transmise      <- le harnais arretait ICI
+#   19:39:07  PersistenceV2 - Finished Loading <- monde reellement charge
+# Dans cette fenetre de 14 s le serveur AUTHENTIFIE le client RCON, execute
+# l'annonce ("[rcon] Executing command: sendserverannouncement") et laisse
+# tomber le `shutdown` qui suit, sans erreur ni trace. mcrcon rend 0, le
+# gestionnaire croit avoir transmis l'arret, et le budget de grace s'epuise en
+# entier avant SIGKILL. Un serveur joignable par RCON n'est donc pas encore un
+# serveur arretable.
+# La fenetre est bornee au demarrage de l'INSTANCE COURANTE et non a un
+# horodatage pris ici : une ligne du meme texte issue d'un demarrage precedent,
+# conservee dans le journal JSON de Docker, ferait passer la precondition sans
+# qu'aucun serveur soit pret.
+check "arret: serveur pret avant l'arret (precondition)" \
+  sh -c '
+    cid=$(docker compose ps -q vrising)
+    test -n "$cid" || exit 1
+    depuis=$(docker inspect -f "{{.State.StartedAt}}" "$cid")
+    test -n "$depuis" || exit 1
+    i=0
+    while [ "$i" -lt 60 ]; do
+      docker compose logs --since "$depuis" 2>&1 | sed "s/\x1b\[[0-9;]*m//g" \
+        | grep -qF "PersistenceV2 - Finished Loading" && exit 0
+      sleep 3; i=$((i + 1))
+    done
+    exit 1
+  '
+
 # Ce check est DESTRUCTIF (il arrete le serveur) : il doit rester le dernier.
 #
 # Le defaut qu'il couvre, mesure le 2026-08-25 sur le serveur de production :
@@ -371,6 +492,72 @@ check "arret: docker compose stop rend exit 0" \
 # consultable, `--since` y compris, sur un conteneur sorti.
 check_out "arret: arret ordonne effectivement journalise" "serveur arrete proprement" \
   docker compose logs --since "$SINCE_ARRET"
+
+echo
+echo "== Arret degrade (RCON injoignable) =="
+# C3 de la revue finale de branche (2026-08-28). `shutdown_handler` faisait
+# `exit 0` dans LES DEUX branches, et journalisait « serveur arrete proprement »
+# des que le processus avait disparu -- y compris quand RCON etait injoignable
+# et que le repli SIGTERM avait tue Wine SANS sauvegarde. Les deux sondes de la
+# section precedente passent donc aussi bien sur un arret reussi que sur un
+# arret perdu : le defaut n4 de la spec, raison d'etre de la moitie du projet,
+# n'avait aucune assertion valide derriere lui.
+#
+# On reproduit le repli sans le simuler : on arrete le serveur PENDANT son
+# demarrage, avant que son RCON n'ecoute. mcrcon echoue alors pour de vrai.
+# `docker compose start` et non `up -d` : `up` recreerait le conteneur au
+# moindre ecart de configuration. Le monde n'est pas encore charge a cet
+# instant, il n'y a donc rien a perdre a cet arret.
+#
+# Le conteneur reste arrete a la fin, comme apres la section precedente.
+DEG_LOG=/tmp/verify-arret-degrade.log
+DEG_RC=/tmp/verify-arret-degrade.rc
+DEG_N1="arret degrade: le repli SIGTERM a bien ete exerce"
+DEG_N2="arret degrade: aucune annonce d'arret propre mensongere"
+DEG_N3="arret degrade: le conteneur ne sort pas en 0"
+rm -f "$DEG_LOG" "$DEG_RC"
+# La mise en scene est couteuse (un demarrage et un arret) : elle ne tourne que
+# si au moins une des trois assertions est selectionnee par le filtre.
+if ! skip "$DEG_N1" || ! skip "$DEG_N2" || ! skip "$DEG_N3"; then
+  # La mise en scene exige un demarrage NEUF : sur un conteneur deja lance, la
+  # ligne « serveur lance » attendue plus bas appartient au demarrage
+  # precedent et n'apparaitra jamais dans la fenetre. No-op immediat dans la
+  # passe complete, ou la section precedente a deja arrete le conteneur.
+  docker compose stop >/dev/null 2>&1
+  DEG_SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  docker compose start >/dev/null 2>&1
+  DEG_CID=$(docker compose ps -q vrising)
+  # On attend la ligne de lancement et non « Server Setup Complete » : c'est
+  # precisement la fenetre ou RCON n'ecoute pas encore. Le trap est installe
+  # dans la foulee de cette ligne, sans E/S intercalee.
+  DEG_I=0
+  while [ "$DEG_I" -lt 120 ]; do
+    docker compose logs --since "$DEG_SINCE" 2>&1 \
+      | grep -qF "serveur lance (pid" && break
+    sleep 1; DEG_I=$((DEG_I + 1))
+  done
+  # Le `trap` est installe juste APRES cette ligne de journal (defaut I1 de la
+  # revue : la fenetre de course est reelle, mesuree le 2026-08-28 -- un stop
+  # tombe une seconde trop tot a coute les 330s de grace puis un SIGKILL).
+  # Cette seconde d'attente met la mise en scene hors de cette fenetre.
+  sleep 1
+  DEG_SINCE_STOP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  docker compose stop >/dev/null 2>&1
+  docker inspect -f '{{.State.ExitCode}}' "$DEG_CID" >"$DEG_RC" 2>/dev/null
+  docker compose logs --since "$DEG_SINCE_STOP" >"$DEG_LOG" 2>&1
+fi
+
+# Precondition, et non un simple confort : sans elle, un arret qui serait passe
+# par RCON (demarrage plus rapide que prevu) ferait passer les deux assertions
+# suivantes sans avoir exerce la branche qu'elles couvrent -- test vide.
+check_out "$DEG_N1" "RCON injoignable" cat "$DEG_LOG"
+# `grep -qF` sur un fichier : sonde deterministe (0 trouve / 1 absent), donc
+# check_absent distingue bien une absence d'un echec de sonde.
+check_absent "$DEG_N2" sh -c 'grep -qF "serveur arrete proprement" "$1"' sh "$DEG_LOG"
+# Le code de sortie doit DISCRIMINER : 0 est reserve a l'arret dont la
+# sauvegarde est prouvee. La garde `-s` interdit le faux PASS d'un fichier vide
+# (mise en scene non jouee), ou `test "" != "0"` serait vrai.
+check "$DEG_N3" sh -c 'test -s "$1" && test "$(cat "$1")" != "0"' sh "$DEG_RC"
 
 echo
 printf 'PASS=%d FAIL=%d\n' "$PASS" "$FAIL"
