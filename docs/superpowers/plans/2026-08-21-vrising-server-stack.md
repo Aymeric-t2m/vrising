@@ -1558,3 +1558,140 @@ en Tâches 3 a 8, `vrising-builder:test` uniquement en Tâche 2.
 **Dépendance conditionnelle** — la Tâche 7 a deux variantes exclusives, A ou B,
 selon le verdict de la Tâche 1. L'exécutant doit lire le verdict consigne dans
 la spec avant de choisir.
+
+---
+
+### Task 9: Masquage des secrets dans les journaux
+
+**Files:**
+- Modify: `docker/entrypoint.sh`
+- Modify: `tests/verify.sh`
+
+**Interfaces:**
+- Consomme : `log()` de la Tâche 5, `VR_PASSWORD` et `RCON_PASSWORD` du contrat `.env` de la Tâche 4.
+- Produit : un flux de sortie du conteneur d'où les valeurs des mots de passe sont absentes.
+
+**Origine.** Exigence posée par l'humain le 2026-08-27, hors du plan initial : les mots de passe ne doivent plus apparaître en clair dans les journaux. Le dépôt privé versionnant le `.env` reste accepté par ailleurs — c'est le flux de journaux qui est visé, pas le dépôt.
+
+**Fuites mesurées** dans `docker compose logs`, cinq lignes par démarrage, valeurs remplacées ici par `<secret>` :
+
+```
+ProjectM.ServerHostSettings - 'Password' ('System.String') overridden by Process Environment Variable 'VR_PASSWORD' - New value: <secret>
+ProjectM.ServerHostSettings - 'Password' ('System.String') overridden by Process Environment Variable 'VR_RCON_PASSWORD' - New value: <secret>
+  "Password": "<secret>",                      (dump ServerHostSettings)
+    "Password": "<secret>",                    (dump du bloc Rcon)
+[rcon] Started listening on 127.0.0.1, Password is: "<secret>"
+```
+
+**Règles de conception à respecter.**
+
+1. **Filtrer sur la VALEUR du secret, jamais sur le format de la ligne.** Un filtre ancré sur `"Password": "` couvre les fuites connues et laisse fuir la prochaine, qu'une mise à jour du jeu formatera autrement. Le filtre expurge toute occurrence des valeurs de `VR_PASSWORD` et `RCON_PASSWORD`, quel que soit le texte autour.
+2. **Un seul point d'étranglement**, en tête d'entrypoint : toute la sortie du conteneur y passe. Les secrets ont deux chemins distincts vers `stdout` — le relais `tail -F` du journal Unity, et la sortie directe du processus serveur et de Wine. Filtrer le seul relais laisserait le second ouvert.
+3. **Sortie ligne par ligne.** Sans désactivation de la mise en tampon, `docker compose logs -f` n'affiche plus rien jusqu'à ce que 4 Ko se soient accumulés, ce qui donne un serveur muet pendant les minutes de son démarrage.
+4. **Pas d'échappement à la main.** `perl` est présent dans l'image (`/usr/bin/perl`, vérifié) et `\Q...\E` cite littéralement une valeur arbitraire. Un `sed` construit par interpolation exigerait d'échapper `. * [ ] ^ $ \ / &` dans un mot de passe, et un oubli casse le filtre ou le rend inopérant.
+5. **Une valeur vide n'installe aucun motif.** Un motif vide correspond partout et remplirait les journaux de marqueurs. Si les deux secrets sont vides, aucun filtre n'est installé et une ligne de journal le dit.
+
+- [ ] **Step 1: Ajouter les assertions au harnais**
+
+Section `== Secrets ==`, insérée avant la section `== Arret propre ==` — le dernier check de celle-ci arrête le conteneur.
+
+Trois assertions, dont la troisième n'est pas un ornement : sans elle, un serveur qui ne journaliserait plus rien du tout passerait les deux premières.
+
+```bash
+echo
+echo "== Secrets =="
+check_absent "secrets: mot de passe du serveur absent des journaux" \
+  sh -c '
+    V=$(. ./.env; printf "%s" "$VR_PASSWORD")
+    test -n "$V" || exit 2          # sonde inexploitable, jamais un faux PASS
+    docker compose logs 2>&1 | grep -qF "$V"
+  '
+check_absent "secrets: mot de passe RCON absent des journaux" \
+  sh -c '
+    V=$(. ./.env; printf "%s" "$RCON_PASSWORD")
+    test -n "$V" || exit 2
+    docker compose logs 2>&1 | grep -qF "$V"
+  '
+check_out "secrets: le masque apparait bien dans les journaux" "***MASQUE***" \
+  sh -c 'docker compose logs 2>&1'
+```
+
+- [ ] **Step 2: Lancer le harnais pour constater l'échec**
+
+Run: `./tests/verify.sh secrets`
+Expected: les deux premières en `FAIL` — les journaux courants contiennent les secrets en clair — et la troisième en `FAIL`, aucun masque n'existant encore.
+
+- [ ] **Step 3: Installer le filtre en tête d'entrypoint**
+
+Juste après la définition de `log()`, avant le bloc `# --- Droits ---` :
+
+```bash
+# --- Masquage des secrets ---------------------------------------------------
+# Le serveur journalise ses mots de passe en clair : cinq lignes par demarrage
+# (mesure du 2026-08-27), dont le dump de sa configuration effective et la
+# ligne « [rcon] Started listening ... Password is: ». On ne peut pas l'en
+# empecher : ces valeurs SONT sa configuration. On expurge donc a la sortie.
+# Point d'etranglement unique : les secrets ont deux chemins vers stdout, le
+# relais du journal Unity et la sortie directe du serveur et de Wine.
+# Le filtre porte sur la VALEUR des secrets et non sur le format des lignes :
+# une mise a jour du jeu qui reformaterait ces messages laisserait fuir un
+# filtre ancre sur leur texte.
+if [ -n "${VR_PASSWORD:-}${RCON_PASSWORD:-}" ]; then
+  exec > >(perl -pe '
+      BEGIN {
+        $| = 1;   # ligne par ligne, sinon docker logs est muet 4 Ko durant
+        @s = grep { length } ($ENV{VR_PASSWORD} // "", $ENV{RCON_PASSWORD} // "");
+      }
+      # `for my $s (@s)` et NON `s/.../.../g for @s` : cette derniere forme
+      # alias $_ sur chaque secret, si bien que la substitution s applique au
+      # mot de passe et jamais a la ligne. MESURE le 2026-08-27 : filtre
+      # installe, message « masquage actif » affiche, et les cinq lignes
+      # fuient quand meme. Panne silencieuse, dans la direction dangereuse.
+      for my $s (@s) { s/\Q$s\E/***MASQUE***/g }
+    ') 2>&1
+  log "masquage des secrets actif dans les journaux"
+else
+  log "aucun secret a masquer (VR_PASSWORD et RCON_PASSWORD vides)"
+fi
+```
+
+- [ ] **Step 4: Recréer le conteneur, et pas seulement le redémarrer**
+
+Le journal JSON de Docker garde les lignes des démarrages précédents, secrets compris : un simple `restart` laisserait les deux premières assertions en échec pour une raison qui n'est plus le défaut. Recréer le conteneur repart d'un journal vide.
+
+```bash
+docker compose up -d --force-recreate
+for i in $(seq 1 180); do
+  docker compose logs 2>&1 | grep -q "Server Setup Complete" && { echo PRET; break; }
+  sleep 5
+done
+```
+
+- [ ] **Step 5: Vérifier**
+
+Run: `./tests/verify.sh secrets`
+Expected: `PASS=3 FAIL=0`.
+
+Vérifier aussi qu'aucune assertion antérieure n'est cassée par le filtre : les sections `demarrage` et `declaratif` grepent le dump de configuration, que le filtre traverse.
+
+Run: `./tests/verify.sh` (passe complète, se termine par un `docker compose stop`)
+Expected: `FAIL=0`.
+
+- [ ] **Step 6: Consigner les deux limites qui subsistent**
+
+Le masquage ne couvre pas tout, et le taire vaudrait moins que rien. À noter dans la documentation de déploiement (Tâche 8) :
+
+- Le **fichier** de journal Unity dans le conteneur (`/opt/vrising/logs/VRisingServer.log`) contient toujours les secrets en clair : le serveur l'écrit lui-même. Y accéder demande un accès Docker, qui vaut déjà un accès root.
+- Les mots de passe **déjà divulgués** — dans les journaux des démarrages passés et dans l'historique git du `.env` — le restent. Seul un changement de mot de passe y remédie.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add docker/entrypoint.sh tests/verify.sh
+git commit -m "feat: masquer les secrets dans les journaux du conteneur
+
+Le serveur journalise VR_PASSWORD et VR_RCON_PASSWORD en clair, cinq lignes
+par demarrage. Filtre par valeur en tete d'entrypoint, point unique par
+lequel passe toute la sortie du conteneur : les secrets ont deux chemins
+vers stdout, le relais du journal Unity et la sortie directe du serveur."
+```
