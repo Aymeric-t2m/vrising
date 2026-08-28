@@ -6,6 +6,15 @@ set -uo pipefail
 FILTER="${1:-}"
 PASS=0; FAIL=0
 
+# Lit UNE valeur du .env sans executer le fichier. `. ./.env`, employe ailleurs
+# dans ce harnais, execute son contenu : une ligne fabriquee y devient du code
+# (I5 de la revue finale). Les guillemets englobants sont retires, conformement
+# a la regle du .env documentee dans docs/deploiement.md.
+lire_env() {
+  sed -n "s/^$1=//p" .env 2>/dev/null | head -1 \
+    | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+}
+
 # Retourne 0 (vrai) si le check doit etre saute au vu du filtre.
 skip() {
   [ -z "$FILTER" ] && return 1
@@ -119,6 +128,83 @@ check_absent "runtime: outillage de build absent" \
     'for b in gcc make git; do command -v "$b" >/dev/null 2>&1 && exit 0; done; exit 1'
 check_out "runtime: prefixe Wine possede par vrising" "1000" \
   docker run --rm --entrypoint stat vrising-server:local -c %u /opt/vrising/.wine
+
+echo
+echo "== Etancheite de l'image =="
+# L'image est destinee a etre publiee dans un registre. Ces trois assertions
+# prouvent qu'elle n'emporte ni donnees d'exploitation ni secrets. Elles sont
+# vraies aujourd'hui PAR CONVENTION (.dockerignore exclut .env, le volume et le
+# prefixe de travail) : rien ne le verifiait, et une convention que rien ne
+# verifie se perd au premier .dockerignore retouche.
+#
+# Chaque sonde porte son CONTROLE POSITIF : elle prouve d'abord qu'elle sait
+# trouver quelque chose qui existe, avant d'affirmer qu'elle n'a rien trouve.
+# Sans lui, une sonde cassee (find absent, chemin deplace) rendrait une chaine
+# vide, donc « rien trouve », donc un PASS mensonger -- le meme piege que les
+# assertions par negation de la Tache 3 et que le troisieme cas de
+# check_absent. La sonde annonce alors "SONDE=cassee", qui ne matche pas
+# l'attendu et fait donc echouer le check.
+#
+# Toutes trois ont ete vues ECHOUER le 2026-08-28 sur une image volontairement
+# contaminee (une sauvegarde, un /root/.env, un secret en clair dans
+# /etc/fuite.conf, une variable RCON_PASSWORD dans Config.Env).
+
+# `-xdev` : reste dans le systeme de fichiers de l'image, sans descendre dans
+# /proc, /sys et /dev que `docker run` y monte.
+check_out "image: aucune sauvegarde ni .env embarque" "SONDE=ok RIEN" \
+  docker run --rm --entrypoint sh vrising-server:local -c '
+    ctrl=$(find /opt/vrising/game -maxdepth 1 -name "VRisingServer.exe" 2>/dev/null)
+    [ -n "$ctrl" ] || { echo "SONDE=cassee"; exit 0; }
+    t=$(find / -xdev \( -name "*.save.gz" -o -name "AutoSave*" -o -name ".env" \) 2>/dev/null)
+    [ -z "$t" ] && echo "SONDE=ok RIEN" || echo "SONDE=ok TROUVE"
+  '
+
+# Les valeurs du .env, recherchees en clair dans l'image.
+# Zones fouillees : tout SAUF /opt/vrising/game et /opt/wine-stable. Ces deux
+# arbres viennent d'amont (SteamCMD, apt WineHQ) et aucun de nos RUN n'y ecrit,
+# ils ne peuvent donc pas contenir un secret a nous ; les fouiller ajouterait
+# 3,5 Go de binaires a grep a chaque passe, pour zero menace couverte. Un
+# secret de ce depot n'entre que par le contexte de build ou par un RUN, qui
+# atterrissent dans les zones listees.
+# LIMITE ASSUMEE : `grep -I` saute les fichiers binaires. Un secret enfoui dans
+# un binaire nous echapperait ; aucun chemin ne l'y mettrait aujourd'hui.
+SECRET_VR=$(lire_env VR_PASSWORD)
+SECRET_RCON=$(lire_env RCON_PASSWORD)
+check_out "image: aucune valeur secrete du .env en clair" "SONDE=ok RIEN" \
+  docker run --rm -e S1="$SECRET_VR" -e S2="$SECRET_RCON" \
+    --entrypoint sh vrising-server:local -c '
+    n=0
+    for v in "$S1" "$S2"; do [ -n "$v" ] && n=$((n + 1)); done
+    [ "$n" -gt 0 ] || { echo "SONDE=cassee-aucun-secret-a-chercher"; exit 0; }
+    ctrl=$(grep -rIlF "entrypoint" /usr/local/bin 2>/dev/null | head -1)
+    [ -n "$ctrl" ] || { echo "SONDE=cassee"; exit 0; }
+    t=""
+    for v in "$S1" "$S2"; do
+      [ -n "$v" ] || continue
+      f=$(grep -rIlF -- "$v" /etc /root /home /usr/local /opt/vrising/.wine \
+            2>/dev/null | head -1)
+      [ -n "$f" ] && t="$f"
+    done
+    [ -z "$t" ] && echo "SONDE=ok RIEN" || echo "SONDE=ok TROUVE"
+  '
+
+# Config.Env de l'image : un ENV pose au build survit dans les metadonnees et se
+# lit par `docker image inspect`, sans meme tirer les couches.
+# Le motif accepte n'importe quel prefixe ou suffixe : le premier jet exigeait
+# « PASS= » et ne voyait donc pas RCON_PASSWORD=. Faux PASS constate sur
+# l'image contaminee, corrige, re-verifie.
+check_out "image: aucune variable sensible dans Config.Env" "SONDE=ok RIEN" \
+  sh -c '
+    e=$(docker image inspect vrising-server:local \
+          -f "{{range .Config.Env}}{{println .}}{{end}}" 2>/dev/null)
+    printf "%s" "$e" | grep -q "PATH=" || { echo "SONDE=cassee"; exit 0; }
+    if printf "%s" "$e" \
+         | grep -qE "^[A-Za-z_]*(PASS|SECRET|TOKEN|KEY|CRED)[A-Za-z_]*=."; then
+      echo "SONDE=ok TROUVE"
+    else
+      echo "SONDE=ok RIEN"
+    fi
+  '
 
 echo
 echo "== Configuration =="
