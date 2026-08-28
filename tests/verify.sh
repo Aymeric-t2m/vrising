@@ -338,6 +338,19 @@ echo "== Arret propre =="
 #
 # On releve l'id AVANT l'arret : `docker compose ps -q` ne rend plus rien une
 # fois le conteneur sorti, et l'inspection porterait alors sur une chaine vide.
+#
+# SINCE_ARRET (F1, 2026-08-28) : capture d'horodatage NUE, hors de tout
+# `check`/`check_out`, donc executee inconditionnellement quel que soit le
+# filtre passe a verify.sh -- meme patron que SINCE dans la section
+# "redemarrage" plus haut. Necessaire pour le check D6 juste apres : mesure
+# du 2026-08-27 sur ce depot, les journaux cumules du conteneur contiennent
+# DEJA 3 occurrences de "serveur arrete proprement" et 2 de
+# "delai de 300s depasse, SIGKILL", issues des passes anterieures du harnais.
+# Un `grep` sans borne temporelle trouverait l'une des trois lignes anciennes
+# meme si l'arret DE CE RUN tombait dans le repli SIGKILL -- faux PASS, et le
+# check precedent ne rattrape rien puisque shutdown_handler fait exit 0 dans
+# les deux branches.
+SINCE_ARRET=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 check "arret: docker compose stop rend exit 0" \
   sh -c '
     cid=$(docker compose ps -q vrising)
@@ -351,10 +364,13 @@ check "arret: docker compose stop rend exit 0" \
 # "serveur arrete proprement en ${waited}s" (docker/entrypoint.sh) ; sa
 # branche de repli SIGKILL journalise "delai de ${GRACE}s depasse, SIGKILL" a
 # la place -- un texte different, donc ce check echouerait bien si l'arret
-# tombait dans ce repli. Le conteneur est deja arrete (check precedent) :
-# `docker compose logs` reste consultable sur un conteneur sorti.
+# tombait dans ce repli. `--since "$SINCE_ARRET"` (capture ci-dessus, AVANT le
+# stop) borne la lecture au seul arret de CE run : une ligne ancienne, meme
+# identique, est hors fenetre et ne peut plus produire de faux PASS (F1). Le
+# conteneur est deja arrete (check precedent) : `docker compose logs` reste
+# consultable, `--since` y compris, sur un conteneur sorti.
 check_out "arret: arret ordonne effectivement journalise" "serveur arrete proprement" \
-  sh -c 'docker compose logs 2>&1'
+  docker compose logs --since "$SINCE_ARRET"
 
 echo
 printf 'PASS=%d FAIL=%d\n' "$PASS" "$FAIL"

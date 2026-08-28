@@ -17,7 +17,7 @@ En production sur un VPS IONOS (`root@217.160.98.201`), fichiers dans `/root`.
 | [`Dockerfile`](Dockerfile) | Deux étages. `builder` télécharge le jeu par SteamCMD et compile `mcrcon` ; `runtime` installe Wine, construit le préfixe et récupère les deux. |
 | [`compose.yaml`](compose.yaml) | Service, ports, montages, `stop_grace_period`. |
 | [`docker/entrypoint.sh`](docker/entrypoint.sh) | Cycle de vie : droits, préfixe Wine, Xvfb, lancement, arrêt ordonné. |
-| [`tests/verify.sh`](tests/verify.sh) | Harnais de vérification, 28 assertions. |
+| [`tests/verify.sh`](tests/verify.sh) | Harnais de vérification incrémental, une assertion par exigence de la spec. |
 | [`.env.example`](.env.example) | Modèle commenté de toute la configuration. Le `.env` réel en dérive. |
 | `vrising-persistent-data/` | Sauvegardes et réglages. **C'est la seule chose irremplaçable.** |
 | `vrising-wine-prefix/` | Préfixe Wine (~1,4 Go), reconstruit tout seul si supprimé. |
