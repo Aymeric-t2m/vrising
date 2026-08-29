@@ -1,0 +1,86 @@
+name: Publier l'image
+
+# La version du jeu n'est PAS epinglable : chaque build attrape celle du moment
+# (docs/deploiement.md, « Limites connues »). Le filtre par chemin evite donc de
+# republier une nouvelle version de jeu a chaque retouche de documentation, et
+# workflow_dispatch reste la seule facon de republier deliberement apres un
+# patch Stunlock, sans commit bidon.
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker/**
+      - compose.yaml
+      - .github/workflows/publier-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# Un build dure des dizaines de minutes et pousse plusieurs Go : deux pushes
+# rapproches se disputeraient le tag `latest`.
+concurrency:
+  group: publier-image
+  cancel-in-progress: true
+
+jobs:
+  publier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      DOCKER_BUILDKIT: 1   # exige par la directive `# syntax=` du Dockerfile
+    steps:
+      # L'image finale pese ~7,5 Go, et ses etages intermediaires davantage :
+      # les quelques Go libres d'un runner neuf n'y suffisent pas. On affiche
+      # l'espace avant et apres, faute de quoi un futur ENOSPC serait muet.
+      - name: Liberer de l'espace disque
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h / | tail -1
+
+      - uses: actions/checkout@v4
+
+      # Le nom d'image vient de compose.yaml et n'est pas reconstruit ici :
+      # `${{ github.repository }}` porterait la majuscule du proprietaire, que
+      # GHCR refuse, et surtout ce serait une SECONDE source de verite, libre
+      # de diverger de ce que le deploiement tire reellement.
+      - name: Deduire le nom d'image de compose.yaml
+        run: |
+          cp .env.example .env
+          REF=$(docker compose config --images | head -1)
+          BASE=${REF%:*}
+          test "$BASE" != "$REF"   # compose.yaml doit porter un tag explicite
+          echo "IMAGE=$BASE" >> "$GITHUB_ENV"
+          echo "VERSION=$(date -u +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      # Le tag date sert au retour arriere : comme la version du jeu n'est pas
+      # epinglable, c'est la seule facon de revenir a une image dont on sait
+      # qu'elle fonctionnait.
+      - name: Construire
+        run: docker build -t "$IMAGE:latest" -t "$IMAGE:$VERSION" .
+
+      # PORTE DE PUBLICATION, avant tout push. `image:` prouve que l'image
+      # n'emporte ni sauvegardes ni secrets -- decisif pour un package public.
+      # `runtime` prouve que Wine est bien epingle, le jeu present, steamcmd
+      # absent et l'utilisateur non-root. Les deux sortent non nul si un seul
+      # check echoue, ce qui arrete le job avant le registre.
+      - name: Eprouver l'image avant publication
+        run: |
+          ./tests/verify.sh runtime
+          ./tests/verify.sh "image:"
+
+      - name: Se connecter a GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publier
+        run: |
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:$VERSION"
+          echo "Publie : $IMAGE:latest et $IMAGE:$VERSION" >> "$GITHUB_STEP_SUMMARY"
