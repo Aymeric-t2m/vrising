@@ -4,12 +4,6 @@ Stack Docker pour héberger un serveur dédié V Rising. Le serveur du jeu n'exi
 qu'en binaire Windows : il tourne ici sous **Wine**, dans une image Debian, avec
 un affichage virtuel Xvfb.
 
-En production sur un VPS IONOS, fichiers dans `/root`.
-
-> L'auto-hébergement depuis un réseau domestique a été étudié puis écarté le
-> 2026-08-25 : héberger chez soi expose l'IP publique du foyer à chaque joueur
-> connecté, ce qu'aucune règle de pare-feu ne corrige. Le VPS absorbe ce risque.
-
 ## Structure
 
 | Chemin | Rôle |

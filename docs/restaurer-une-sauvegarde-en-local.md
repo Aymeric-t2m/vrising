@@ -25,17 +25,19 @@ sous-dossier `.TEMP` puis les déplace à leur emplacement définitif : un fichi
 et on ne risque pas de capturer une écriture en cours.
 
 ```bash
-SERVEUR=root@<adresse-de-ton-vps>
+SERVEUR=<utilisateur>@<adresse-du-serveur>
+DEPOT=<chemin-du-depot-sur-le-serveur>
 MONDE=vrising_world          # valeur de VR_SAVE_NAME dans .env
 
 ssh "$SERVEUR" \
-  "tar czf - -C /root/vrising-persistent-data/Saves/v4 --exclude=.TEMP $MONDE" \
+  "tar czf - -C $DEPOT/vrising-persistent-data/Saves/v4 --exclude=.TEMP $MONDE" \
   | tar xzf - -C .
 ```
 
-`tar` par-dessus SSH plutôt que `rsync` : **`rsync` n'est installé ni sur ce
-poste ni sur le serveur** (vérifié). Mesure du 2026-08-25 : 2,9 s pour 8
-sauvegardes, soit une soixantaine de mégaoctets.
+`tar` par-dessus SSH plutôt que `rsync` : `tar` et `ssh` suffisent, là où
+`rsync` doit être présent des **deux** côtés — ce qui n'est pas acquis sur une
+installation minimale. Mesure du 2026-08-25 : 2,9 s pour 8 sauvegardes, soit
+une soixantaine de mégaoctets.
 
 Vous obtenez un dossier `vrising_world/` contenant :
 
