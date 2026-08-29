@@ -56,13 +56,26 @@ jobs:
           BASE=${REF%:*}
           test "$BASE" != "$REF"   # compose.yaml doit porter un tag explicite
           echo "IMAGE=$BASE" >> "$GITHUB_ENV"
-          echo "VERSION=$(date -u +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "VERSION=v${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
 
-      # Le tag date sert au retour arriere : comme la version du jeu n'est pas
-      # epinglable, c'est la seule facon de revenir a une image dont on sait
-      # qu'elle fonctionnait.
+      # Deux tags, et le numerote n'est pas decoratif : `latest` bouge a chaque
+      # publication, il ne designe donc AUCUNE image en particulier des le build
+      # suivant. Comme la version du jeu n'est pas epinglable, deux images
+      # construites du meme commit peuvent differer -- le numero de run est la
+      # seule facon de nommer celle qui fonctionnait, et donc d'y revenir.
+      # Il vient de GITHUB_RUN_NUMBER : monotone, automatique, et aucune image
+      # ne peut sortir sans numero. Un semver pose a la main laisserait les
+      # publications ordinaires anonymes.
+      # Les labels OCI portent la tracabilite vers la source, ce qu'un tag ne
+      # fait pas : ils voyagent avec l'image, y compris apres un `docker pull`.
       - name: Construire
-        run: docker build -t "$IMAGE:latest" -t "$IMAGE:$VERSION" .
+        run: |
+          docker build \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t "$IMAGE:latest" -t "$IMAGE:$VERSION" .
 
       # PORTE DE PUBLICATION, avant tout push. `image:` prouve que l'image
       # n'emporte ni sauvegardes ni secrets -- decisif pour un package public.
