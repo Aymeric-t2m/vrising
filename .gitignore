@@ -1,4 +1,6 @@
-# .env
-# vrising-persistent-data/
+.env
+vrising-persistent-data/
 .tmp/
 vrising-wine-prefix/
+.superpowers
+.claude

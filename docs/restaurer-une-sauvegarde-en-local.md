@@ -25,7 +25,7 @@ sous-dossier `.TEMP` puis les déplace à leur emplacement définitif : un fichi
 et on ne risque pas de capturer une écriture en cours.
 
 ```bash
-SERVEUR=root@217.160.98.201
+SERVEUR=root@<adresse-de-ton-vps>
 MONDE=vrising_world          # valeur de VR_SAVE_NAME dans .env
 
 ssh "$SERVEUR" \
