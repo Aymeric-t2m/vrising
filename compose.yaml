@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: vrising-server:local
+    image: ghcr.io/aymeric-t2m/vrising:latest
     restart: unless-stopped
     # Strictement superieur au SHUTDOWN_TIMEOUT de l'entrypoint (300s), pour que
     # Docker ne tue jamais le conteneur avant la fin de l'arret ordonne.

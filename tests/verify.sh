@@ -90,6 +90,16 @@ check_absent() {
   esac
 }
 
+# Image eprouvee : DERIVEE de compose.yaml, jamais codee en dur. Le harnais doit
+# eprouver exactement l'image que le deploiement utilisera ; deux constantes a
+# tenir synchronisees finissent toujours par diverger, et le harnais passerait
+# alors au vert sur une image que personne ne deploie.
+IMAGE=$(docker compose config --images 2>/dev/null | head -1)
+if [ -z "$IMAGE" ]; then
+  printf "ERREUR: impossible de deduire l'image depuis compose.yaml.\n" >&2
+  exit 2
+fi
+
 echo "== Etage builder =="
 check_out "builder: VRisingServer.exe present" "VRisingServer.exe" \
   docker run --rm vrising-builder:test ls /game
@@ -105,29 +115,29 @@ echo "== Etage runtime =="
 # --entrypoint est obligatoire : la Tache 5 ajoute un ENTRYPOINT qui ignore
 # les arguments, ces checks casseraient sinon des la Tache 5.
 check_out "runtime: wine epingle en 10.0" "wine-10.0" \
-  docker run --rm --entrypoint wine vrising-server:local --version
+  docker run --rm --entrypoint wine "$IMAGE" --version
 check_out "runtime: jeu present" "VRisingServer.exe" \
-  docker run --rm --entrypoint ls vrising-server:local /opt/vrising/game
+  docker run --rm --entrypoint ls "$IMAGE" /opt/vrising/game
 check_out "runtime: mcrcon present" "Usage: mcrcon" \
-  docker run --rm --entrypoint mcrcon vrising-server:local -h
+  docker run --rm --entrypoint mcrcon "$IMAGE" -h
 check_out "runtime: prefixe Wine initialise" "system.reg" \
-  docker run --rm --entrypoint ls vrising-server:local /opt/vrising/.wine
+  docker run --rm --entrypoint ls "$IMAGE" /opt/vrising/.wine
 # uid 1000 et non un uid haut : voir le commentaire du Dockerfile — il doit
 # correspondre au PUID par defaut pour eviter un copy-up de 1,4 Go au demarrage.
 check_out "runtime: utilisateur vrising en uid 1000" "uid=1000" \
-  docker run --rm --entrypoint id vrising-server:local vrising
+  docker run --rm --entrypoint id "$IMAGE" vrising
 # `command -v steamcmd` est INTROUVABLE meme dans le builder, ou steamcmd
 # existe pourtant a /opt/steamcmd/steamcmd.sh : il n'est jamais sur le PATH.
 # L'assertion passait donc dans les DEUX images sans rien discriminer. On teste
 # le chemin d'installation reel, verifie present dans le builder et absent ici.
 check_absent "runtime: steamcmd absent de l'image finale" \
-  docker run --rm --entrypoint test vrising-server:local -e /opt/steamcmd
+  docker run --rm --entrypoint test "$IMAGE" -e /opt/steamcmd
 # L'outillage de compilation ne doit pas non plus avoir survecu a COPY --from.
 check_absent "runtime: outillage de build absent" \
-  docker run --rm --entrypoint sh vrising-server:local -c \
+  docker run --rm --entrypoint sh "$IMAGE" -c \
     'for b in gcc make git; do command -v "$b" >/dev/null 2>&1 && exit 0; done; exit 1'
 check_out "runtime: prefixe Wine possede par vrising" "1000" \
-  docker run --rm --entrypoint stat vrising-server:local -c %u /opt/vrising/.wine
+  docker run --rm --entrypoint stat "$IMAGE" -c %u /opt/vrising/.wine
 
 echo
 echo "== Etancheite de l'image =="
@@ -152,7 +162,7 @@ echo "== Etancheite de l'image =="
 # `-xdev` : reste dans le systeme de fichiers de l'image, sans descendre dans
 # /proc, /sys et /dev que `docker run` y monte.
 check_out "image: aucune sauvegarde ni .env embarque" "SONDE=ok RIEN" \
-  docker run --rm --entrypoint sh vrising-server:local -c '
+  docker run --rm --entrypoint sh "$IMAGE" -c '
     ctrl=$(find /opt/vrising/game -maxdepth 1 -name "VRisingServer.exe" 2>/dev/null)
     [ -n "$ctrl" ] || { echo "SONDE=cassee"; exit 0; }
     t=$(find / -xdev \( -name "*.save.gz" -o -name "AutoSave*" -o -name ".env" \) 2>/dev/null)
@@ -172,7 +182,7 @@ SECRET_VR=$(lire_env VR_PASSWORD)
 SECRET_RCON=$(lire_env RCON_PASSWORD)
 check_out "image: aucune valeur secrete du .env en clair" "SONDE=ok RIEN" \
   docker run --rm -e S1="$SECRET_VR" -e S2="$SECRET_RCON" \
-    --entrypoint sh vrising-server:local -c '
+    --entrypoint sh "$IMAGE" -c '
     n=0
     for v in "$S1" "$S2"; do [ -n "$v" ] && n=$((n + 1)); done
     [ "$n" -gt 0 ] || { echo "SONDE=cassee-aucun-secret-a-chercher"; exit 0; }
@@ -195,7 +205,7 @@ check_out "image: aucune valeur secrete du .env en clair" "SONDE=ok RIEN" \
 # l'image contaminee, corrige, re-verifie.
 check_out "image: aucune variable sensible dans Config.Env" "SONDE=ok RIEN" \
   sh -c '
-    e=$(docker image inspect vrising-server:local \
+    e=$(docker image inspect "$1" \
           -f "{{range .Config.Env}}{{println .}}{{end}}" 2>/dev/null)
     printf "%s" "$e" | grep -q "PATH=" || { echo "SONDE=cassee"; exit 0; }
     if printf "%s" "$e" \
@@ -204,7 +214,7 @@ check_out "image: aucune variable sensible dans Config.Env" "SONDE=ok RIEN" \
     else
       echo "SONDE=ok RIEN"
     fi
-  '
+  ' sh "$IMAGE"
 
 echo
 echo "== Configuration =="
@@ -280,7 +290,7 @@ check "droits: le prefixe Wine est reattribue quand PUID differe de son uid" \
     # execute le harnais, sans coder 1001 en dur.
     cible=$(( $(stat -c %u "$d/system.reg") + 1 ))
     cid=$(docker run -d -e PUID="$cible" -e PGID="$cible" \
-            -v "$d":/opt/vrising/.wine-run vrising-server:local 2>/dev/null) \
+            -v "$d":/opt/vrising/.wine-run "$1" 2>/dev/null) \
       || { rm -rf "$base"; exit 1; }
     i=0
     while [ "$i" -lt 30 ]; do
@@ -293,11 +303,11 @@ check "droits: le prefixe Wine est reattribue quand PUID differe de son uid" \
     # prefixe avant d etre tue et y laisse des repertoires en 0700 sous l uid
     # cible, que l hote ne peut pas supprimer (mesure du 2026-08-28). Meme
     # image que la sonde, donc aucune dependance nouvelle pour le harnais.
-    docker run --rm --entrypoint rm -v "$base":/nettoyage vrising-server:local \
+    docker run --rm --entrypoint rm -v "$base":/nettoyage "$1" \
       -rf /nettoyage/prefixe >/dev/null 2>&1
     rmdir "$base" 2>/dev/null
     test "$uid" = "$cible"
-  '
+  ' sh "$IMAGE"
 
 echo
 echo "== Demarrage =="
