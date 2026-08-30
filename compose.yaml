@@ -53,3 +53,32 @@ services:
         source: ./config/ServerGameSettings.json
         target: /config/ServerGameSettings.json
         read_only: true
+
+  # Mise a jour automatique du serveur des qu'une nouvelle image est publiee.
+  #
+  # WATCHTOWER_TIMEOUT EST VITAL, et sa valeur par defaut (10 s) detruirait des
+  # mondes. Watchtower arrete les conteneurs avec SON delai, pas avec le
+  # `stop_grace_period` ci-dessus, qui ne vaut que pour `docker compose stop`.
+  # L'arret ordonne de ce serveur prend ~230 s (mesure du 2026-08-30 :
+  # « serveur arrete proprement en 229s »), le temps que le jeu previenne les
+  # joueurs puis ecrive son monde. A 10 s, Watchtower enverrait SIGKILL en
+  # pleine sauvegarde a CHAQUE mise a jour -- le defaut n4 de la spec, remis en
+  # place par la porte de derriere. 360 s laisse la meme marge que les 330 s de
+  # stop_grace_period.
+  watchtower:
+    container_name: matvi-watchtower
+    image: nickfedor/watchtower:latest
+    restart: unless-stopped
+    environment:
+      WATCHTOWER_POLL_INTERVAL: 300
+      WATCHTOWER_TIMEOUT: 360
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_INCLUDE_STOPPED: "false"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      WATCHTOWER_ROLLING_RESTART: "true"
+      WATCHTOWER_NO_RESTART: "false"
+      WATCHTOWER_NOTIFICATIONS_LEVEL: "info"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
