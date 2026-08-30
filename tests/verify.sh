@@ -94,7 +94,15 @@ check_absent() {
 # eprouver exactement l'image que le deploiement utilisera ; deux constantes a
 # tenir synchronisees finissent toujours par diverger, et le harnais passerait
 # alors au vert sur une image que personne ne deploie.
-IMAGE=$(docker compose config --images 2>/dev/null | head -1)
+#
+# Le SERVICE EST NOMME, et ce n'est pas une precaution de style. `--images` sans
+# argument rend une ligne par service, dans un ordre NON DETERMINISTE : mesure
+# du 2026-08-30 sur ce compose a deux services, 12 appels ont rendu 6 fois
+# vrising en premier et 6 fois watchtower. Un `head -1` etait donc un tirage a
+# pile ou face, et la CI a effectivement eprouve l'image de watchtower -- un
+# binaire Go sans shell, d'ou huit checks en echec sur
+# `exec: "sh": executable file not found`.
+IMAGE=$(docker compose config --images vrising 2>/dev/null | head -1)
 if [ -z "$IMAGE" ]; then
   printf "ERREUR: impossible de deduire l'image depuis compose.yaml.\n" >&2
   exit 2

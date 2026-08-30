@@ -5,6 +5,12 @@ name: Publier l'image
 # republier une nouvelle version de jeu a chaque retouche de documentation, et
 # workflow_dispatch reste la seule facon de republier deliberement apres un
 # patch Stunlock, sans commit bidon.
+#
+# compose.yaml N'EST PAS dans le filtre : son contenu n'entre pas dans l'image.
+# L'y laisser faisait reconstruire 7,5 Go pendant 30 min pour l'ajout d'un
+# service voisin, et depuis Watchtower cela redemarre la production dans la
+# foulee. Contrepartie assumee : si le NOM de l'image y change, aucun build ne
+# part tout seul, il faut un workflow_dispatch.
 on:
   push:
     branches: [main]
@@ -12,7 +18,6 @@ on:
       - Dockerfile
       - .dockerignore
       - docker/**
-      - compose.yaml
       - .github/workflows/publier-image.yml
   workflow_dispatch:
 
@@ -49,10 +54,14 @@ jobs:
       # `${{ github.repository }}` porterait la majuscule du proprietaire, que
       # GHCR refuse, et surtout ce serait une SECONDE source de verite, libre
       # de diverger de ce que le deploiement tire reellement.
+      # Le SERVICE est nomme : `--images` seul rend une ligne par service dans
+      # un ordre non deterministe (mesure du 2026-08-30 : 6 fois sur 12 chacun,
+      # sur un compose a deux services). Sans le nom, ce job construirait et
+      # pousserait une image sous le nom du service voisin une fois sur deux.
       - name: Deduire le nom d'image de compose.yaml
         run: |
           cp .env.example .env
-          REF=$(docker compose config --images | head -1)
+          REF=$(docker compose config --images vrising | head -1)
           BASE=${REF%:*}
           test "$BASE" != "$REF"   # compose.yaml doit porter un tag explicite
           echo "IMAGE=$BASE" >> "$GITHUB_ENV"
