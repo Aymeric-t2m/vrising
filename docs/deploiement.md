@@ -33,7 +33,7 @@ cp .env.example .env
 Puis :
 
 ```bash
-docker compose build    # long : 2 Go a telecharger
+docker compose pull     # ~7,5 Go a telecharger la premiere fois
 docker compose up -d
 docker compose logs -f  # attendre "Server Setup Complete"
 ```
@@ -83,13 +83,28 @@ sinon le preset charge ses propres règles à la place des tiennes.
 
 ## Mise à jour du jeu
 
-Les fichiers du jeu sont figés dans l'image. Après un patch Stunlock, les
-joueurs ne peuvent se reconnecter qu'après :
+Les fichiers du jeu sont figés dans l'image, et **la version du jeu n'est pas
+épinglable** : une image reconstruite embarque celle du moment. Après un patch
+Stunlock, il faut donc republier une image, puis la tirer.
+
+Republier — le dépôt ne changeant pas, aucun push ne déclenchera la CI, il faut
+la lancer à la main :
 
 ```bash
-docker compose build --no-cache
+gh workflow run publier-image.yml
+gh run watch          # ~30 min
+```
+
+Puis, sur le serveur :
+
+```bash
+docker compose pull
 docker compose up -d
 ```
+
+Pour revenir à une image antérieure dont tu sais qu'elle fonctionnait, remplace
+le tag de `compose.yaml` par son numéro de version (`:v3` par exemple) : c'est
+à cela que sert la numérotation, `latest` ayant déjà bougé.
 
 ## Arrêt
 
@@ -122,9 +137,14 @@ docker build --target builder -t vrising-builder:test .
 ./tests/verify.sh
 ```
 
-`docker compose build` ne pose pas de tag sur l'étage `builder` : sans la
-première commande, les deux assertions qui l'inspectent échouent faute d'image,
-et non faute de défaut. Cette image ne sert qu'au harnais.
+L'étage `builder` n'existe dans aucune image publiée — il est jeté à la fin du
+build multi-étages. Sans la première commande, les deux assertions qui
+l'inspectent échouent faute d'image, et non faute de défaut. Cette image ne sert
+qu'au harnais.
+
+Le harnais éprouve l'image que `compose.yaml` désigne, donc celle du registre
+après un `pull`. Pour éprouver une image construite localement, il faut l'avoir
+taguée sous ce même nom.
 
 Le harnais **arrête le serveur** : ses deux dernières sections vérifient l'arrêt
 ordonné puis l'arrêt dégradé, et le laissent arrêté. Relance-le avec

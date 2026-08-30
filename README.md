@@ -39,7 +39,8 @@ installé un gestionnaire. Sans lui, `docker compose stop` attendait les 330 s d
 ## Exploitation
 
 ```bash
-docker compose up -d --build     # construire et démarrer
+docker compose pull              # tirer l'image publiee
+docker compose up -d             # demarrer
 docker compose logs -f           # suivre
 docker compose stop              # arrêt ordonné, ~3 min 30
 ./tests/verify.sh                # tout vérifier (destructif : arrête le serveur)

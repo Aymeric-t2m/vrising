@@ -1,8 +1,12 @@
 services:
   vrising:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # L'image vient du registre, construite et publiee par GitHub Actions
+    # (.github/workflows/publier-image.yml). Pas de section `build:` : sa
+    # presence ferait construire `docker compose up` en local des que l'image
+    # manque, au lieu de la tirer -- le deploiement produirait alors une image
+    # differente de celle qui a passe la porte de verification de la CI.
+    # Pour construire deliberement en local :
+    #   docker build -t ghcr.io/aymeric-t2m/vrising:latest .
     image: ghcr.io/aymeric-t2m/vrising:latest
     restart: unless-stopped
     # Strictement superieur au SHUTDOWN_TIMEOUT de l'entrypoint (300s), pour que
