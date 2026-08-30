@@ -8,6 +8,7 @@ services:
     # Pour construire deliberement en local :
     #   docker build -t ghcr.io/aymeric-t2m/vrising:latest .
     image: ghcr.io/aymeric-t2m/vrising:latest
+    container_name: vrising-server
     restart: unless-stopped
     # Strictement superieur au SHUTDOWN_TIMEOUT de l'entrypoint (300s), pour que
     # Docker ne tue jamais le conteneur avant la fin de l'arret ordonne.
@@ -53,6 +54,8 @@ services:
         source: ./config/ServerGameSettings.json
         target: /config/ServerGameSettings.json
         read_only: true
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   # Mise a jour automatique du serveur des qu'une nouvelle image est publiee.
   #
@@ -66,7 +69,7 @@ services:
   # place par la porte de derriere. 360 s laisse la meme marge que les 330 s de
   # stop_grace_period.
   watchtower:
-    container_name: matvi-watchtower
+    container_name: watchtower
     image: nickfedor/watchtower:latest
     restart: unless-stopped
     environment:
