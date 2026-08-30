@@ -59,6 +59,7 @@ l'est pas. Le référencement passe par EOS, pas par le master server Steam
 | --- | --- |
 | [Rejouer une sauvegarde en solo](docs/restaurer-une-sauvegarde-en-local.md) | Récupérer le monde du serveur et l'ouvrir en partie solo. |
 | [Déploiement](docs/deploiement.md) | Installation sur une machine neuve, pare-feu, administration, limites connues. |
+| [Administration](docs/administration.md) | Déclarer les administrateurs dans le `.env`, s'authentifier en jeu, ce que RCON ne fait pas. |
 | [Spécification](docs/superpowers/specs/2026-08-21-vrising-server-stack-design.md) | Conception, contraintes, décisions et leurs justifications. |
 | [Plan d'implémentation](docs/superpowers/plans/2026-08-21-vrising-server-stack.md) | Découpage en tâches, avec le détail de chacune. |
 | [Journal d'exécution](.superpowers/sdd/2026-08-21-vrising-server-stack/) | Briefs, rapports et mesures tâche par tâche. |
