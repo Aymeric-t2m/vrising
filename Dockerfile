@@ -3,7 +3,7 @@
 ########################################
 # Etage builder : jetable
 ########################################
-FROM debian:12-slim AS builder
+FROM debian:13-slim AS builder
 
 ARG STEAM_APP_ID=1829350
 ARG MCRCON_REF=v0.7.2
@@ -46,7 +46,7 @@ RUN git clone --depth 1 --branch ${MCRCON_REF} \
 ########################################
 # Etage runtime : image finale
 ########################################
-FROM debian:12-slim AS runtime
+FROM debian:13-slim AS runtime
 
 ARG WINE_VERSION=10.0.0.0~bookworm-1
 # 1000 et non un uid haut : il DOIT correspondre au PUID par defaut, sinon
