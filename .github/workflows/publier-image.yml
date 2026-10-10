@@ -48,7 +48,7 @@ jobs:
                       /opt/hostedtoolcache/CodeQL /usr/local/share/boost
           df -h / | tail -1
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Le nom d'image vient de compose.yaml et n'est pas reconstruit ici :
       # `${{ github.repository }}` porterait la majuscule du proprietaire, que
