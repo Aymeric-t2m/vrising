@@ -1,0 +1,19 @@
+# Mises a jour de versions. Les correctifs de securite (CVE) sont actives
+# separement dans les reglages du depot (Dependabot security updates).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
